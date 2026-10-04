@@ -79,11 +79,13 @@ async function enqueue(id,{auto=false,force=false}={}){
   await engine('enqueue',{contentId:id,meta:s.metadata[id]??{},asrModel:s.settings.asrModel});
   return {pending:true};
 }
-async function prepare(id,force=false,{poll=false}={}){
+async function prepare(id,force=false,{poll=false,note=false}={}){
   if(active.has(id))throw new Error('이 강의는 이미 처리 중입니다.');
   deleted.delete(id);
   const s=await allowed(id);
+  if(note&&s.settings.mode!=='ai')throw new Error('요약 노트는 AI 모드에서 만들 수 있습니다. 로컬 전용은 받아쓰기와 원문 HTML만 만듭니다.');
   const found=await engine('lecture',{contentId:id});
+  if(note&&found.item?.state!=='done')throw new Error('저장된 받아쓰기가 없습니다. 강의 목록에서 받아쓰기를 완료한 뒤 다시 눌러 주세요.');
   // 확인 화면의 반복 확인(poll)은 상태만 보고 처리를 다시 시작하지 않는다. 그래야 '중지'가 3초 뒤 되살아나지 않고
   // 처리 내내 저장소 쓰기가 반복되지 않는다. 처리 시작은 첫 요청에서만 한다.
   if(found.item?.state!=='done'){if(poll)return {pending:true,state:s.statuses[id]?.state??null};return enqueue(id,{force});}
@@ -162,10 +164,12 @@ const uiHandlers={
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
   download:m=>download(requiredId(m.contentId)),
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),
+  prepareNote:m=>prepare(requiredId(m.contentId),false,{note:true}),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
   openConfirm:(m,sender)=>openConfirm(requiredId(m.contentId),m.force===true,sender),
   startProcessing:m=>startProcessing(requiredId(m.contentId)),
   async openOptions(){await chrome.runtime.openOptionsPage();return {};},
+  async openConsent(){await chrome.tabs.create({url:SELF+'consent.html'});return {};},
   async resetPanel(){await chrome.sidePanel.setOptions({path:'sidepanel.html'});return {};},
 };
 export async function route(m,sender){

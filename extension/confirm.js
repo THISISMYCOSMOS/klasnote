@@ -22,6 +22,7 @@ const params = new URLSearchParams(location.search);
 const contentId = (params.get('id') || '').trim();
 const force = params.get('force') === 'true' || params.get('force') === '1';
 const inPanel=params.get('panel')==='1';
+const noteOnly=params.get('note')==='1';
 
 let scene;
 let requestId = null;
@@ -91,7 +92,7 @@ function renderReady(res, settings, host) {
 let polling = false; // 첫 요청 뒤에는 상태 확인만 한다(처리 재시작 금지)
 async function pollPrepare(settings, host, forceOverride = force) {
   if (destroyed) return;
-  const res = await callBg('prepareSummary', { contentId, force: forceOverride, poll: polling });
+  const res = await callBg(noteOnly ? 'prepareNote' : 'prepareSummary', { contentId, force: forceOverride, poll: polling });
   if (destroyed) return;
   if (res.ok === false) { fail(`준비 실패: ${res.error || ''}`); return; }
   if (res.pending) {
@@ -176,6 +177,7 @@ async function returnToList(){
 }
 
 function init() {
+  if(window.top!==window.self){fail('요약 확인 화면은 새 탭에서 열어 주세요.');return;}
   if(inPanel){document.body.classList.add('in-panel');el('backBtn').hidden=false;el('backBtn').addEventListener('click',e=>{if(e.isTrusted)returnToList();});}
   if(!inPanel)scene = mountCampusScene(el('campusHost'), { state: 'study', motion: true, compact: true });
 
@@ -194,6 +196,16 @@ function init() {
     const settings = stateRes.ok === false ? {} : stateRes.settings;
     const host = stateRes.ok === false ? undefined : stateRes.host;
     scene?.setMotion(settings?.motion !== false);
+    if(noteOnly&&(!settings.consent||settings.mode!=='ai')){
+      el('loadingMsg').textContent='';el('content').hidden=false;
+      el('lec-h').parentElement.hidden=true;el('est-h').parentElement.hidden=true;
+      el('pageTitle').textContent='요약노트 만들기';
+      el('transNotice').textContent='현재 설정에서는 받아쓰기와 원문 HTML만 만듭니다. 요약 노트는 데이터 처리 안내에서 AI 모드를 선택한 뒤, 이 화면을 새로고침하면 만들 수 있습니다. API 키 없이 PC에 로그인한 Claude Code/Codex 계정을 사용하며 해당 계정의 사용량이 소모됩니다.';
+      setConfirmAction('요약 설정 열기',()=>callBg('openConsent'));
+      el('noteRetryBtn').hidden=false;
+      el('noteRetryBtn').onclick=e=>{if(e.isTrusted)location.reload();};
+      return;
+    }
     pollPrepare(settings, host);
   });
 

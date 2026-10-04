@@ -82,6 +82,20 @@ test('unopened lecture and missing consent block processing',async()=>{
 test('forged player ID cannot grant opened permission',async()=>{
   reset();delete data.opened[id];await assert.rejects(route({type:'lectureOpened',contentId:id},{id:ext,url:'https://kwcommons.kw.ac.kr/em/aaaaaaaaaaaaaaaa',tab:{id:3}}),/다릅니다/);assert.equal(data.opened[id],undefined);
 });
+test('report note action uses completed saved transcription without ASR or automatic AI',async()=>{
+  reset();lectureState='done';enqueueCount=0;
+  const ready=await send('prepareNote',{contentId:id});
+  assert.equal(ready.local,false);assert.equal(enqueueCount,0);assert.equal(nativeCount,0);assert.equal(downloads,0);
+  await send('summarize',{contentId:id,requestId:ready.requestId});assert.equal(nativeCount,1);assert.equal(downloads,1);
+  reset();lectureState='paused';enqueueCount=0;
+  await assert.rejects(send('prepareNote',{contentId:id}),/저장된 받아쓰기/);
+  assert.equal(enqueueCount,0);assert.equal(nativeCount,0);assert.equal(downloads,0);
+  lectureState='done';data.settings.mode='local';engineCount=0;
+  await assert.rejects(send('prepareNote',{contentId:id}),/AI 모드/);
+  assert.equal(engineCount,0);assert.equal(nativeCount,0);assert.equal(downloads,0);
+  data.settings.mode='ai';data.settings.consent=false;
+  await assert.rejects(send('prepareNote',{contentId:id}),/안내/);
+});
 test('preparing estimate never invokes AI; concurrent/replayed confirmation charges once',async()=>{
   reset();const ready=await send('prepareSummary',{contentId:id});assert.equal(nativeCount,0);
   const results=await Promise.allSettled([send('summarize',{contentId:id,requestId:ready.requestId}),send('summarize',{contentId:id,requestId:ready.requestId})]);

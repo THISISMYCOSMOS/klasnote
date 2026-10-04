@@ -336,7 +336,7 @@ const handlers = {
   async report({ contentId, summary, meta }) {
     const { lecture, slides, segments } = await loadGroups(contentId);
     const groups = groupBySlide(slides, segments);
-    const html = await buildReport({ lecture, groups, summary, meta: { ...meta, asrModel: lecture.asrModel || 'whisper-small' } });
+    const html = await buildReport({ lecture, groups, summary, meta: { ...meta, asrModel: lecture.asrModel || 'whisper-small', extensionId: chrome.runtime.id } });
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
     return { url, title: lecture.title };

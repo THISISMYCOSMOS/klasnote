@@ -60,6 +60,8 @@ async function blobToDataUrl(blob) {
 
 // groups: groupBySlide 결과 [{start,end,blob,segs}], summary: AI JSON 또는 null
 export async function buildReport({ lecture, groups, summary, meta }) {
+  const noteUrl = /^[a-p]{32}$/.test(meta.extensionId ?? '') && /^[0-9a-f]{8,32}$/i.test(lecture.contentId ?? '')
+    ? `chrome-extension://${meta.extensionId}/note-launch.html?id=${lecture.contentId.toLowerCase()}` : null;
   const corrections = correctionMatcher((summary?.corrections ?? []).filter((c) => Array.isArray(c) && c.length === 2).slice(0, 60));
   const scriptHash = await sha256b64(VIEW_SCRIPT);
   const bySlide = new Map((summary?.slides ?? []).map((s) => [Number(s.s), s]));
@@ -90,6 +92,7 @@ main{max-width:1100px;margin:0 auto;padding:24px 16px 64px}h1{font-size:22px;mar
 .view{position:sticky;top:0;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);z-index:1;display:flex;gap:6px}
 .view button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:5px 12px;cursor:pointer;font:inherit;font-size:13px}
 .view button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+.note-action{display:inline-block;margin-top:12px;padding:8px 16px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none;font-weight:600}.note-help{margin:4px 0 12px;color:var(--muted);font-size:12px}
 .card{border:1px solid var(--line);border-radius:10px;margin:14px 0;overflow:hidden;break-inside:avoid}
 .card header{padding:8px 14px;background:var(--card);border-bottom:1px solid var(--line);font-size:13px}.card header time{color:var(--muted);margin-left:6px}
 .body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;padding:14px}
@@ -110,6 +113,7 @@ ${lecture.period ? `<div><dt>학습기간</dt><dd>${esc(lecture.period)}</dd></d
 <div><dt>정리</dt><dd>받아쓰기 ${esc(meta.asrModel)} · 요약 ${esc(meta.aiLabel)} · ${esc(meta.createdAt)}</dd></div>
 </dl>
 ${summary ? `<h2>강의 핵심</h2><div class="box"><p>${esc(summary.overview)}</p></div>${exam ? `<h2>시험 포인트</h2><div class="box"><ul>${exam}</ul></div>` : ''}` : '<div class="box"><p>AI 요약 없이 원문만 정리한 파일입니다.</p></div>'}
+${noteUrl ? `<a class="note-action" href="${esc(noteUrl)}" target="_blank" rel="noopener noreferrer">요약노트 만들기</a><p class="note-help">KLAS 강의 요약 확장이 설치된 Chrome에서 열면, 저장된 받아쓰기로 요약을 준비합니다. 확인 후에만 AI로 전송합니다.</p>` : ''}
 <div class="view" role="group" aria-label="보기 방식"><button data-v="both" aria-pressed="true">함께 보기</button><button data-v="sum" aria-pressed="false">요약만</button><button data-v="raw" aria-pressed="false">원문만</button></div>
 ${cards.join('\n')}
 <p class="meta">원문은 이 PC에서 음성인식으로 받아쓴 것이라 오류가 있을 수 있습니다. <mark>표시</mark>는 AI가 교정한 말이며, 마우스를 올리면 원래 받아쓰기가 보입니다. 개인 학습용이며, 강의 자료의 저작권은 교수자에게 있습니다.</p>
