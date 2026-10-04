@@ -7,7 +7,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-node scripts\setup.mjs
+node scripts\start.mjs
 if errorlevel 1 (
   echo 설치하지 못했습니다. 위 오류를 확인하세요.
   pause

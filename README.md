@@ -8,14 +8,17 @@
 
 Windows, Chrome 116 이상, [Node.js LTS](https://nodejs.org/)가 필요합니다.
 
-1. 설치 ZIP을 **모두 압축 해제**하고 `install.cmd`를 더블클릭합니다. 우니 이미지와 처리 라이브러리가 포함돼 있어 `npm install`은 필요 없습니다.
-2. 설치가 끝나면 Chrome 확장 관리 화면과 설치 폴더가 열립니다.
-3. Chrome에서 **개발자 모드 → 압축해제된 확장 프로그램을 로드**를 누르고 열린 `extension` 폴더를 선택합니다.
-4. 처음 설정에서 **로컬 전용 → 계속**을 누릅니다. AI가 필요하면 AI 모드를 선택합니다.
+1. 설치 ZIP을 **모두 압축 해제**합니다.
+2. **start.cmd**를 더블클릭합니다. 첫 실행에 설치하고, 확장이 자동 연결된 별도 Chrome 창에서 KLAS를 엽니다. 폴더를 직접 고르지 않습니다.
+3. 해당 Chrome 창에서 KLAS에 로그인하고 처음 설정을 완료합니다. 다음부터도 **start.cmd**로 실행합니다.
 
-설치 위치는 `%LOCALAPPDATA%\KlasSummarizer\extension`입니다. 관리자 권한은 필요 없습니다. 업데이트는 새 ZIP의 `install.cmd`를 실행한 뒤 확장 관리 화면에서 **새로고침**합니다. Chrome은 확장을 자동 등록할 수 없어 3번은 직접 해야 합니다. 보안 경고가 나오면 경고를 우회하지 말고 설치를 멈추세요.
+우니 이미지와 처리 라이브러리가 포함돼 있어 npm 설치는 필요 없습니다. 설치 위치는 `%LOCALAPPDATA%\KlasSummarizer`이고 관리자 권한은 필요 없습니다.
 
-소스 ZIP에는 처리 라이브러리가 없습니다. 개발용 설치는 `npm ci` → `node scripts/vendor.mjs` → `install.cmd` 순서입니다.
+이 실행 파일은 개발용 별도 Chrome 프로필을 사용하며 기본 Chrome에 영구 설치하지 않습니다. 확장은 실행할 때마다 자동 연결하고, 해당 Chrome 창을 모두 닫으면 연결용 프로세스도 끝납니다. 기존 기본 Chrome의 로그인은 가져오지 않습니다.
+
+기본 Chrome에서 사용하려면 한 번만 `chrome://extensions`의 개발자 모드에서 `%LOCALAPPDATA%\KlasSummarizer\extension`을 로드합니다. ZIP의 상위 폴더를 선택하면 manifest.json을 찾을 수 없다는 오류가 납니다. 일반 사용자용 설치는 [Chrome 웹 스토어 배포](https://developer.chrome.com/docs/extensions/how-to/distribute)가 필요합니다.
+
+소스 설치는 `npm ci` → `node scripts/vendor.mjs` → `start.cmd` 순서입니다.
 
 ## 사용
 

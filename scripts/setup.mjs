@@ -59,9 +59,7 @@ function main(){
   fs.writeFileSync(manifestPath,JSON.stringify({name:hostName,description:'Personal KLAS lecture summaries',path:launcher,type:'stdio',allowed_origins:[`chrome-extension://${extensionId}/`]},null,2));
   const result=spawnSync('reg.exe',['add',registryKey,'/ve','/t','REG_SZ','/d',manifestPath,'/f'],{encoding:'utf8',windowsHide:true});
   if(result.error||result.status!==0)throw Error('현재 사용자 네이티브 호스트 등록에 실패했습니다.');
-  console.log('설치 완료. Chrome에서 개발자 모드 → 압축해제된 확장 프로그램 로드 → 아래 폴더를 선택하세요.\n'+extensionTarget+'\n이미 등록했다면 확장을 새로고침하세요.');
-  const chrome=[process.env.PROGRAMFILES,process.env['PROGRAMFILES(X86)'],process.env.LOCALAPPDATA].filter(Boolean).map(p=>path.join(p,'Google/Chrome/Application/chrome.exe')).find(p=>fs.existsSync(p));
-  if(chrome)launch(chrome,['chrome://extensions/']);
-  launch('explorer.exe',[extensionTarget]);
+  console.log('설치 완료: '+extensionTarget);
+  if(!process.argv.includes('--install-only'))launch(process.execPath,[path.join(source,'scripts/chrome-launch.mjs')]);
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))try{main();}catch(e){console.error(e.message);process.exitCode=1;}
