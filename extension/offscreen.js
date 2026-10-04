@@ -44,7 +44,7 @@ async function run(job) {
   const end = mp4.duration;
   status(contentId, { step: '받아쓰기 모델 불러오는 중' });
   let lastPct = -1, lastPctAt = 0; // 저장소 쓰기 폭주 방지(독립 검토 F5)
-  const asr = await loadAsr(asrModel, (p) => {
+  let asr = await loadAsr(asrModel, (p) => {
     if (p.status === 'progress' && p.total > 5e6) {
       const pct = Math.round(p.progress), now = Date.now();
       if (pct !== lastPct && now - lastPctAt >= 1000) { lastPct = pct; lastPctAt = now; status(contentId, { step: `모델 받는 중 ${pct}%` }); }
@@ -68,7 +68,16 @@ async function run(job) {
     const finished = det.push(frames);
     if (t1 >= end) finished.push(...det.finish(end));
     try {
-    const segs=await transcribe(asr,pcm,t);
+    // GPU 장치 리셋 등으로 받아쓰기 모델이 망가지면(예: 해제된 GPU 버퍼 재해제 'destroy' 오류) 모델을 새로 불러 그 구간을 한 번 더 한다.
+    let segs;
+    try { segs = await transcribe(asr, pcm, t); }
+    catch (e) {
+      if (e?.paused) throw e;
+      console.warn('asr retry after failure', e);
+      await releaseAsr().catch(() => {});
+      asr = await loadAsr(asrModel);
+      segs = await transcribe(asr, pcm, t);
+    }
     if (cancelled.has(contentId)) { cancelled.delete(contentId); throw Object.assign(new Error('사용자가 중지함'), { paused: true }); }
     await store.putMany('segments', segs.map((s) => ({ contentId, ...s })));
     const slideRows = [];
@@ -109,7 +118,7 @@ function friendlyError(e) {
   else if (/HTTP|fetch|network|Failed to fetch|영상 받기/i.test(raw)) msg = '강의 영상을 받지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.';
   else if (/디코딩|Decoding|EncodingError|decode/i.test(raw)) msg = '영상 해석에 실패했어요. 강의를 재생 중이면 잠시 후 다시 시도하세요.';
   else if (/bad_alloc|memory|OOM|Out of memory/i.test(raw)) msg = '메모리가 부족해요. 다른 탭을 닫거나 설정에서 받아쓰기 모델을 base로 바꾼 뒤 다시 시도하세요.';
-  else if (/webgpu|GPU|device lost/i.test(raw)) msg = 'GPU 처리 중 문제가 생겼어요. Chrome을 다시 열고 다시 시도하세요.';
+  else if (/webgpu|GPU|device lost|reading 'destroy'|onuncapturederror|mapAsync/i.test(raw)) msg = 'GPU 처리 중 문제가 생겼어요. Chrome을 다시 열고 다시 시도하세요.';
   else if (/model|onnx|huggingface|모델/i.test(raw)) msg = '받아쓰기 모델을 받지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.';
   return `${msg} (${raw})`.slice(0, 300);
 }
