@@ -7,7 +7,7 @@ import {HOST_NAME as hostName,EXTENSION_ID as extensionId,platformPaths,macHostS
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const registryKey=`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName}`;
-const required=['extension/manifest.json','extension/sidepanel.html','extension/assets/uni-basic.png','extension/assets/uni-study.png','extension/assets/uni-walk.png','extension/assets/uni-fly.png','extension/vendor/transformers.js','extension/vendor/mp4box.all.js','extension/vendor/ort-wasm-simd-threaded.asyncify.mjs','extension/vendor/ort-wasm-simd-threaded.asyncify.wasm','native-host/host.mjs'];
+const required=['extension/manifest.json','extension/sidepanel.html','extension/vendor/transformers.js','extension/vendor/mp4box.all.js','extension/vendor/ort-wasm-simd-threaded.asyncify.mjs','extension/vendor/ort-wasm-simd-threaded.asyncify.wasm','native-host/host.mjs'];
 
 function inspectTree(file){
   const stat=fs.lstatSync(file);

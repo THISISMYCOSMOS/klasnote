@@ -1,22 +1,10 @@
-// campus.js — 광운대 캠퍼스 장면 + 우니(마스코트) 모션 컴포넌트.
+// campus.js — 캠퍼스 배경 장면 컴포넌트(캐릭터 없음).
 // sidepanel.js / options.js / confirm.js가 공용으로 불러 쓴다. 외부 의존성 없음, 전부 코드로 그린 원본 SVG.
 // innerHTML은 여기 정의된 고정(static) 마크업에만 쓰고, 페이지/서버/AI 데이터는 절대 넣지 않는다.
 
-const SPRITES = {
-  idle: 'assets/uni-basic.png',
-  study: 'assets/uni-study.png',
-  walk: 'assets/uni-walk.png',
-  success: 'assets/uni-fly.png',
-};
+const STATES = new Set(['idle', 'study', 'walk', 'success']);
 
-const STATE_ALT = {
-  idle: '우니가 광장에 서 있는 모습',
-  study: '우니가 도서관 앞에서 공부하는 모습',
-  walk: '우니가 캠퍼스를 뛰어다니는 모습(처리 중)',
-  success: '우니가 기뻐하는 모습(완료)',
-};
-
-// 고정 SVG 캠퍼스 배경 (원본 일러스트, 공식 마스코트 PNG는 사용하지 않음).
+// 고정 SVG 캠퍼스 배경 (원본 일러스트).
 const SCENE_SVG = `
 <svg class="campus-scene__svg" viewBox="0 0 640 240" preserveAspectRatio="xMidYMax slice" role="img" aria-label="광운대학교 캠퍼스 일러스트">
   <defs>
@@ -135,22 +123,6 @@ export function mountCampusScene(container, opts = {}) {
     root.appendChild(badge);
   }
 
-  const mascot = document.createElement('div');
-  mascot.className = 'campus-mascot';
-  const shadow = document.createElement('div');
-  shadow.className = 'campus-mascot__shadow';
-  const bob = document.createElement('div');
-  bob.className = 'campus-mascot__bob';
-  const img = document.createElement('img');
-  img.className = 'campus-mascot__sprite';
-  img.addEventListener('error',()=>{if(!img.src.endsWith('/assets/note.svg')){img.src='assets/note.svg';img.alt='개인 복습 노트';}});
-  img.src = SPRITES[state] ?? SPRITES.idle;
-  img.alt = STATE_ALT[state] ?? '';
-  bob.appendChild(img);
-  mascot.appendChild(shadow);
-  mascot.appendChild(bob);
-  root.appendChild(mascot);
-
   const toggleBtn = document.createElement('button');
   toggleBtn.type = 'button';
   toggleBtn.className = 'campus-toggle';
@@ -187,10 +159,7 @@ export function mountCampusScene(container, opts = {}) {
   reduceMotionQuery?.addEventListener?.('change', onReduceMotionChange);
 
   function applyState(next) {
-    mascot.classList.remove('campus-mascot--idle', 'campus-mascot--study', 'campus-mascot--walk', 'campus-mascot--success');
-    mascot.classList.add(`campus-mascot--${next}`);
-    img.src = SPRITES[next] ?? SPRITES.idle;
-    img.alt = STATE_ALT[next] ?? '';
+    root.dataset.state = next;
   }
 
   applyMotion();
@@ -198,7 +167,7 @@ export function mountCampusScene(container, opts = {}) {
 
   return {
     setState(next, { holdMs } = {}) {
-      if (!SPRITES[next]) return;
+      if (!STATES.has(next)) return;
       // 같은 상태를 다시 요청받으면(주기적 refresh 등) 이미지를 다시 불러오거나
       // 재생 중인 애니메이션을 처음부터 다시 시작하지 않는다.
       if (next === state) {

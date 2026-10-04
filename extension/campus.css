@@ -1,4 +1,4 @@
-/* 캠퍼스 장면 + 우니(마스코트) 모션 컴포넌트. popup.html / options.html 공용.
+/* 캠퍼스 배경 장면 컴포넌트. popup.html / options.html 공용.
    색: 버건디(--kw-burgundy) / 크림(--kw-cream) / 세이지(--kw-sage). */
 
 .campus-scene {
@@ -31,84 +31,6 @@
 }
 
 /* 구름은 정지된 배경 장식으로만 쓴다(불필요한 움직임 없음). */
-
-/* ---- 마스코트(우니): 길 위에 작게, 그림자로 바닥에 붙어 보이게 ---- */
-.campus-mascot {
-  position: absolute;
-  left: 50%;
-  top: 77%;
-  width: 11%;
-  min-width: 30px;
-  max-width: 64px;
-  transform: translate(-50%, -100%) scaleX(1);
-  z-index: 5;
-  pointer-events: none;
-}
-
-.campus-mascot__shadow {
-  position: absolute;
-  left: 50%;
-  bottom: -2px;
-  width: 78%;
-  height: 16%;
-  transform: translateX(-50%);
-  background: radial-gradient(ellipse at center, rgba(58, 42, 38, 0.32) 0%, rgba(58, 42, 38, 0) 75%);
-  border-radius: 50%;
-}
-
-.campus-mascot__bob {
-  display: block;
-  width: 100%;
-}
-
-.campus-mascot__sprite {
-  display: block;
-  width: 100%;
-  height: auto;
-  image-rendering: -webkit-optimize-contrast;
-}
-
-/* 상태별 애니메이션: transform(이동)만 사용, 흔들림/회전/바운스는 쓰지 않는다. */
-.campus-scene[data-motion="on"] .campus-mascot--walk {
-  animation: uniWalk 14s ease-in-out infinite;
-}
-
-/* 정지 상태(모션 끔 / 일시정지 / 모션 감소 선호): 상태별 고정 위치만 표시, 전부 길 위(바닥선)에 맞춤 */
-.campus-mascot--idle { left: 46%; top: 77%; transform: translate(-50%, -100%) scaleX(1); }
-.campus-mascot--study { left: 68%; top: 76%; transform: translate(-50%, -100%) scaleX(-1); }
-.campus-mascot--walk { left: 50%; top: 77%; }
-.campus-mascot--success { left: 46%; top: 77%; }
-
-/* 길을 따라 좌우로만 천천히 걷는다(수직 이동/회전 없음, transform-only). */
-@keyframes uniWalk {
-  0%   { transform: translate(-50%, -100%) translateX(-120%) scaleX(1); }
-  45%  { transform: translate(-50%, -100%) translateX(120%)  scaleX(1); }
-  50%  { transform: translate(-50%, -100%) translateX(120%)  scaleX(-1); }
-  95%  { transform: translate(-50%, -100%) translateX(-120%) scaleX(-1); }
-  100% { transform: translate(-50%, -100%) translateX(-120%) scaleX(1); }
-}
-
-/* 완료 상태는 과장된 회전 없이 살짝 커지는 정도로만 표시한다. */
-.campus-scene[data-motion="on"] .campus-mascot--success {
-  animation: uniSettle 0.9s ease-out 1;
-}
-@keyframes uniSettle {
-  0% { transform: translate(-50%, -100%) scale(0.92); }
-  100% { transform: translate(-50%, -100%) scale(1); }
-}
-
-/* 모션 끔 / 일시정지 / 사용자 모션 감소 선호: 전부 정지, 최종 포즈만 표시 */
-.campus-scene[data-motion="off"] .campus-mascot,
-.campus-scene[data-motion="off"] .campus-mascot__bob {
-  animation: none !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .campus-scene .campus-mascot,
-  .campus-scene .campus-mascot__bob {
-    animation: none !important;
-  }
-}
 
 /* ---- 모션 일시정지 버튼 ---- */
 .campus-toggle {
