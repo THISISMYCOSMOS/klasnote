@@ -5,9 +5,10 @@
 // - CLI의 도구(파일 수정·명령 실행)는 끄거나 읽기 전용으로 둔다. 작업 폴더는 매번 새 빈 임시 폴더이며 끝나면 지운다.
 // - 계정 정보는 다루지 않는다. 각 CLI가 이미 가진 로그인을 그대로 쓴다.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync, statSync, accessSync, constants as fsConstants } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 const CLAUDE_MODELS = new Set(['haiku', 'sonnet', 'opus']);
 const CODEX_MODEL = 'gpt-5.6-terra'; // 사용자 결정: Codex는 Terra 고정
@@ -59,27 +60,74 @@ function send(obj) {
   process.stdout.write(Buffer.concat([h, b]));
 }
 
-// ---- 실행 파일 찾기 (npm 전역 설치 기준 + Claude 네이티브 설치 위치) ----
-function npmRoots() {
-  const roots = [];
-  if (process.env.APPDATA) roots.push(join(process.env.APPDATA, 'npm'));
-  if (process.env.npm_config_prefix) roots.push(process.env.npm_config_prefix);
-  return roots;
+// ---- 실행 파일 찾기 (Windows·macOS). 반환: { cmd, pre } — pre는 cmd 뒤에 붙는 고정 인자(예: node가 실행할 .js) ----
+const WIN = process.platform === 'win32';
+
+function readHostConfig() {
+  try { return JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'host-config.json'), 'utf8')) || {}; } catch { return {}; }
+}
+
+// npm 전역 모듈 폴더. Windows: <prefix>\node_modules, macOS: <prefix>/lib/node_modules
+// (prefix는 이 host를 실행한 node 기준이라 Homebrew·nvm·공식 설치 모두 잡힌다)
+function npmModuleDirs() {
+  const dirs = [];
+  if (WIN) {
+    if (process.env.APPDATA) dirs.push(join(process.env.APPDATA, 'npm', 'node_modules'));
+    dirs.push(join(dirname(process.execPath), 'node_modules')); // nvm-windows 등: 전역 모듈이 node 옆에 있음
+    const cfg = readHostConfig(); if (cfg.npmPrefix) dirs.push(join(cfg.npmPrefix, 'node_modules')); // 설치 때 기록한 npm prefix -g (독립 검토 F11)
+    if (process.env.npm_config_prefix) dirs.push(join(process.env.npm_config_prefix, 'node_modules'));
+  } else {
+    const nodePrefix = dirname(dirname(process.execPath));
+    dirs.push(join(nodePrefix, 'lib', 'node_modules'), join(homedir(), '.npm-global', 'lib', 'node_modules'));
+    const cfg = readHostConfig(); if (cfg.npmPrefix) dirs.push(join(cfg.npmPrefix, 'lib', 'node_modules'));
+    if (process.env.npm_config_prefix) dirs.push(join(process.env.npm_config_prefix, 'lib', 'node_modules'));
+  }
+  return dirs;
+}
+
+// macOS에서 CLI가 흔히 설치되는 bin 폴더(공식 설치, Homebrew, npm, node 옆)
+function unixBinDirs() {
+  const h = homedir();
+  return [join(h, '.local', 'bin'), join(h, '.claude', 'local'), '/opt/homebrew/bin', '/usr/local/bin',
+    join(h, '.npm-global', 'bin'), dirname(process.execPath)];
+}
+
+// 심볼릭 링크를 따라가 .js 진입점이면 이 node로, 실행 파일이면 직접 실행한다(shell 없이).
+function asCommand(file) {
+  try {
+    const real = realpathSync(file);
+    if (!statSync(real).isFile()) return null;
+    if (/\.(c|m)?js$/i.test(real)) return { cmd: process.execPath, pre: [real] };
+    if (!WIN) accessSync(real, fsConstants.X_OK);
+    return { cmd: real, pre: [] };
+  } catch { return null; }
+}
+
+function firstCommand(files) {
+  for (const f of files) { const c = existsSync(f) && asCommand(f); if (c) return c; }
+  return null;
 }
 
 function findClaude() {
-  const c = [
-    ...npmRoots().map((r) => join(r, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')),
-    join(homedir(), '.local', 'bin', 'claude.exe'),
-  ];
-  return c.find(existsSync) || null;
+  if (WIN) {
+    return firstCommand([
+      ...npmModuleDirs().map((d) => join(d, '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')),
+      join(homedir(), '.local', 'bin', 'claude.exe'),
+    ]);
+  }
+  return firstCommand([
+    ...unixBinDirs().map((d) => join(d, 'claude')),
+    ...npmModuleDirs().flatMap((d) => [join(d, '@anthropic-ai', 'claude-code', 'bin', 'claude'), join(d, '@anthropic-ai', 'claude-code', 'cli.js')]),
+  ]);
 }
 
 function findCodex() {
-  const c = npmRoots().map((r) => join(r, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
-  const js = c.find(existsSync);
-  return js ? { cmd: process.execPath, pre: [js] } : null;
+  const js = npmModuleDirs().map((d) => join(d, '@openai', 'codex', 'bin', 'codex.js'));
+  return firstCommand(WIN ? js : [...js, ...unixBinDirs().map((d) => join(d, 'codex'))]);
 }
+
+// Chrome이 Finder에서 실행되면 PATH가 짧다. CLI가 내부에서 node 등을 찾을 수 있게 보강한다.
+if (!WIN) process.env.PATH = [...unixBinDirs(), process.env.PATH || '/usr/bin:/bin'].join(':');
 
 function run(cmd, args, { stdin, cwd }) {
   return new Promise((resolve, reject) => {
@@ -115,8 +163,8 @@ function validate(m) {
 }
 
 async function claude({ model, system, prompt, images }) {
-  const exe = findClaude();
-  if (!exe) throw new Error('claude CLI를 찾지 못했습니다');
+  const c = findClaude();
+  if (!c) throw new Error('claude CLI를 찾지 못했습니다');
   if (!CLAUDE_MODELS.has(model)) throw new Error('허용되지 않은 모델');
   const cwd = makeTemp();
   try {
@@ -129,7 +177,7 @@ async function claude({ model, system, prompt, images }) {
     const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--no-session-persistence', '--system-prompt', system, '--tools', '', '--strict-mcp-config',
       '--setting-sources', 'project', '--disable-slash-commands', '--model', model];
-    const r = await run(exe, args, { stdin: line, cwd });
+    const r = await run(c.cmd, [...c.pre, ...args], { stdin: line, cwd });
     const res = r.out.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((j) => j?.type === 'result');
     if (!res) throw new Error(`claude 실행 실패 (code ${r.code}) ${r.err.slice(-500)}`);
     if (res.is_error) throw new Error(`claude 오류: ${String(res.result).slice(0, 500)}`);

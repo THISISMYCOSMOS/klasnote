@@ -28,6 +28,8 @@ export function compact(text) {
 
 // 대본 문장을 슬라이드 구간에 배정한다(문장 중간 시각 기준).
 export function groupBySlide(slides, segments) {
+  // 슬라이드가 하나도 없으면(음성만 있는 강의 등) 대본이 사라지지 않게 전체 길이 한 칸을 만든다(독립 검토 F10).
+  if (!slides.length && segments.length) slides = [{ start: 0, end: segments[segments.length - 1].end, blob: null }];
   const groups = slides.map((s) => ({ ...s, segs: [] }));
   let k = 0;
   for (const seg of segments) {

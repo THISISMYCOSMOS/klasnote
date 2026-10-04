@@ -6,6 +6,7 @@ const HOST='com.klas_summarizer.host';
 let storageTail=Promise.resolve(), engineCreation=null;
 const active=new Set(), deleted=new Set();
 const nativeJobs=new Map();
+const lastOpened=new Map(); // 강의 열림 이벤트 중복 방지(두 플레이어 프레임·빠른 재열기)
 async function state(){const s=await chrome.storage.local.get(['settings','statuses','opened','metadata']);return {settings:{...DEFAULT_SETTINGS,...s.settings},statuses:s.statuses??{},opened:s.opened??{},metadata:s.metadata??{}};}
 function mutate(fn){const p=storageTail.then(async()=>{const s=await state();await fn(s);await chrome.storage.local.set(s);chrome.runtime.sendMessage({target:'ui',type:'stateChanged'}).catch(()=>{});return s;});storageTail=p.catch(()=>{});return p;}
 async function patch(id,p){await mutate(s=>{s.statuses[id]={...s.statuses[id],...p,updatedAt:Date.now()};});}
@@ -43,6 +44,19 @@ async function ensureEngine(){
   return engineCreation;
 }
 async function engine(cmd,data={}){await ensureEngine();return rawEngine(cmd,data);}
+// 크롬 재시작·충돌·처리 탭 닫힘 뒤에는 메모리의 작업 큐가 사라진다. 실제 작업이 없는 '처리 중' 상태를 '중단됨'으로 돌려
+// 학생이 '다시 시도'로 이어서 처리할 수 있게 한다(독립 검토 F1).
+async function reconcile(){
+  const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT','TAB'],documentUrls:[SELF+'offscreen.html',SELF+'processor.html']});
+  let jobs=new Set();
+  if(contexts.length){try{const r=await rawEngine('jobs');jobs=new Set([r.running,...(r.queued||[])].filter(Boolean));}catch{}}
+  await mutate(s=>{for(const [id,st] of Object.entries(s.statuses)){
+    if(['queued','running'].includes(st?.state)&&!jobs.has(id))s.statuses[id]={...st,state:'paused',step:'중단됨 · 다시 시도하면 이어서 처리해요',preview:null,updatedAt:Date.now()};
+    else if(st?.state==='summarizing'&&!active.has(id))s.statuses[id]={...st,state:'error',step:'처리 오류',error:'Chrome이 닫히거나 다시 시작되어 AI 요약이 중단됐어요. "다시 시도"를 누르세요(이미 쓴 사용량은 돌아오지 않아요).',updatedAt:Date.now()};
+  }});
+}
+reconcile().catch(()=>{});
+chrome.runtime.onStartup?.addListener(()=>{reconcile().catch(()=>{});});
 async function chooseProvider(settings){if(settings.provider!=='auto')return settings.provider;const host=await nativeCall({cmd:'detect'});if(host.claude)return 'claude';if(host.codex)return 'codex';throw new Error('Claude Code 또는 Codex CLI를 설치하고 로그인하세요.');}
 const settingsKey=s=>JSON.stringify([s.mode,s.provider,s.claudeModel,s.preset,s.confirmBeforeSend]);
 async function packHash(pack){const data=new TextEncoder().encode(JSON.stringify({prompt:pack.prompt,images:pack.images}));const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',data));return Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');}
@@ -77,7 +91,8 @@ async function prepare(id,force=false){
   if(pack)checkPayload({cmd:'summarize',provider,model:s.settings.claudeModel,prompt:pack.prompt,images:pack.images});
   const requestId=crypto.randomUUID();
   const ticket={requestId,expires:Date.now()+20*60*1000,settingsKey:settingsKey(s.settings),provider,local,cached:useCache,force,hash:pack?await packHash(pack):null};
-  await patch(id,{ticket,state:local||useCache?'done':'awaiting_confirmation',step:local?'로컬 HTML 준비됨':useCache?'저장된 요약 사용':'전송 확인 대기',estimate:pack?.estimate??{text:0,images:0,overhead:0,total:0}});
+  const keepComplete=s.statuses[id]?.state==='complete'&&(local||useCache);
+  await patch(id,{ticket,error:null,state:keepComplete?'complete':local||useCache?'done':'awaiting_confirmation',step:keepComplete?s.statuses[id].step:local?'로컬 HTML 준비됨':useCache?'저장된 요약 사용':'전송 확인 대기',estimate:pack?.estimate??{text:0,images:0,overhead:0,total:0}});
   return {requestId,estimate:pack?.estimate??{text:0,images:0,overhead:0,total:0},title:found.item.title,provider,cached:useCache,local};
 }
 async function summarize(id,requestId){
@@ -88,7 +103,7 @@ async function summarize(id,requestId){
     if(!ticket||ticket.requestId!==requestId||ticket.expires<Date.now()||ticket.settingsKey!==settingsKey(s.settings))throw new Error('확인 정보가 만료되었거나 설정이 변경되었습니다. 다시 견적을 확인하세요.');
     // Consume before any paid call, so duplicate clicks/replays cannot charge twice.
     await patch(id,{ticket:null,intent:null});
-    if(ticket.local||ticket.cached){const r=await download(id);await patch(id,{state:'complete',step:'HTML 저장 완료'});return r;}
+    if(ticket.local||ticket.cached){const r=await download(id);await patch(id,{state:'complete',step:'HTML 저장 완료',error:null});return r;}
     const pack=await engine('pack',{contentId:id,preset:s.settings.preset,provider:ticket.provider});
     if(await packHash(pack)!==ticket.hash)throw new Error('전송할 내용이 변경되었습니다. 견적을 다시 확인하세요.');
     const request={cmd:'summarize',provider:ticket.provider,model:s.settings.claudeModel,prompt:pack.prompt,images:pack.images};checkPayload(request);
@@ -97,11 +112,14 @@ async function summarize(id,requestId){
     const controller=new AbortController();nativeJobs.set(id,controller);
     const response=await nativeCall(request,{signal:controller.signal});
     const summary=parseSummary(response.text);
-    if(summary.slides.length!==pack.slideCount||summary.slides.some((x,i)=>x.s!==i+1))throw new Error('AI 요약의 슬라이드 순서/개수가 맞지 않습니다.');
+    // AI가 슬라이드를 하나 빼거나 합쳐도 결과를 버리지 않는다(독립 검토 F6). 범위 밖 번호는 버리고 빈 번호는 비운다.
+    const byS=new Map();for(const x of summary.slides){const n=Number(x?.s);if(Number.isInteger(n)&&n>=1&&n<=pack.slideCount&&!byS.has(n))byS.set(n,x);}
+    if(pack.slideCount>0&&byS.size===0&&!summary.overview)throw new Error('AI 응답에 사용할 수 있는 요약이 없습니다.');
+    summary.slides=Array.from({length:pack.slideCount},(_,i)=>byS.get(i+1)??{s:i+1,summary:[],comment:''});
     const latest=await state();
     if(deleted.has(id)||!latest.settings.consent||latest.settings.mode!=='ai')throw new Error('작업이 취소되어 결과를 저장하지 않았습니다.');
     const aiLabel=ticket.provider==='codex'?'Codex · gpt-5.6-terra':`Claude · ${s.settings.claudeModel}`;
-    await engine('saveSummary',{contentId:id,item:{contentId:id,summary,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage}});
+    await engine('saveSummary',{contentId:id,item:{contentId:id,summary,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage,rawText:String(response.text||'').slice(0,400000)}});
     const r=await download(id);await patch(id,{state:'complete',step:'개인 요약 HTML 저장 완료',usage:response.usage,error:null});return r;
   }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'처리 오류',error:String(e.message||e)});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
 }
@@ -118,7 +136,7 @@ async function openConfirm(id,force=false,sender){
   const opening=chrome.sidePanel&&sender?.tab?chrome.sidePanel.open({tabId:sender.tab.id}).then(()=>true,()=>false):Promise.resolve(false);
   await allowed(id);
   if(chrome.sidePanel&&(await opening||sender?.url?.startsWith(SELF+'sidepanel.html'))){
-    try{await chrome.sidePanel.setOptions({path:`confirm.html?id=${id}&panel=1${force?'&force=1':''}`});return {panel:true};}catch{}
+    try{const path=`confirm.html?id=${id}&panel=1${force?'&force=1':''}`;await chrome.sidePanel.setOptions(sender?.tab?{tabId:sender.tab.id,path}:{path});return {panel:true};}catch{}
   }
   const tabs=await chrome.tabs.create({url:`${SELF}confirm.html?id=${id}${force?'&force=1':''}`});return {tabId:tabs.id};
 }
@@ -130,12 +148,13 @@ const uiHandlers={
   async test(){const s=await state();if(!s.settings.consent||s.settings.mode!=='ai')throw new Error('AI 모드 동의 후 연결 테스트가 가능합니다.');return nativeCall({cmd:'test',provider:await chooseProvider(s.settings),model:s.settings.claudeModel});},
   async getLibrary(){const [items,summaries]=await Promise.all([store.allLectures(),store.allSummaries()]);return {items,summaries:Object.fromEntries(summaries.map(x=>[x.contentId,{createdAt:x.createdAt,aiLabel:x.aiLabel}]))};},
   async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT','TAB'],documentUrls:[SELF+'offscreen.html',SELF+'processor.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
-  async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}await engine('cancel',{contentId:id});await patch(id,{intent:null,ticket:null,step:'중지 요청됨'});return {};},
+  async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
   download:m=>download(requiredId(m.contentId)),
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
   openConfirm:(m,sender)=>openConfirm(requiredId(m.contentId),m.force===true,sender),
   async openOptions(){await chrome.runtime.openOptionsPage();return {};},
+  async resetPanel(){await chrome.sidePanel.setOptions({path:'sidepanel.html'});return {};},
 };
 export async function route(m,sender){
   const role=classifySender(sender,SELF,chrome.runtime.id);if(!role)throw new Error('허용되지 않은 메시지 발신자');
@@ -149,14 +168,16 @@ export async function route(m,sender){
       }
       return {consent:s.settings.consent,counts};
     }
-    if(m.type==='openPanel'){await chrome.sidePanel.open({tabId:sender.tab.id});return {};}
+    if(m.type==='openPanel'){const opening=chrome.sidePanel.open({tabId:sender.tab.id});chrome.sidePanel.setOptions({tabId:sender.tab.id,path:'sidepanel.html'}).catch(()=>{});await opening;return {};}
     if(role==='status')throw new Error('상태 표시에서 허용되지 않은 요청');
   }
   if(role==='engine'){
     if(m.type!=='status'||!validId(m.contentId))throw new Error('처리 상태 메시지 오류');
     const id=m.contentId.toLowerCase();if(deleted.has(id))return {};
     const input=m.patch??{},p={};
-    for(const k of ['state','step','progress','title'])if(Object.hasOwn(input,k))p[k]=input[k];
+    for(const k of ['state','step','progress','title','preview','slides','error'])if(Object.hasOwn(input,k))p[k]=input[k];
+    if(p.error!==undefined)p.error=p.error==null?null:String(p.error).slice(0,300);
+    if(p.preview!==undefined)p.preview=String(p.preview).slice(0,400);if(p.slides!==undefined)p.slides=Math.max(0,Math.min(10000,Math.floor(Number(p.slides)||0)));
     if(p.state&&!['queued','running','done','paused','error'].includes(p.state))throw new Error('상태 오류');
     if(p.progress!==undefined)p.progress=Math.max(0,Math.min(1,Number(p.progress)||0));
     if(p.title)p.title=String(p.title).slice(0,200);if(p.step)p.step=String(p.step).slice(0,500);
@@ -178,6 +199,8 @@ export async function route(m,sender){
       if(typeof m.enabled!=='boolean')throw new Error('스위치 값 오류');await patch(id,{auto:m.enabled});return {};
     }
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
+    // 목록의 'HTML 받기': 이미 완료된 강의만, 저장된 결과로 다시 만든다(AI 재호출 없음).
+    if(m.type==='download'){const s=await state();if(s.statuses[id]?.state!=='complete')throw new Error('처리가 끝난 강의만 받을 수 있습니다.');return download(id);}
     throw new Error('목록에서 허용되지 않은 요청');
   }
   if(role==='player'){
@@ -187,7 +210,8 @@ export async function route(m,sender){
     const queryId=url.searchParams.get('content_id')??url.searchParams.get('contentId');
     if((pathId??queryId)?.toLowerCase()!==id)throw new Error('플레이어 URL과 강의 ID가 다릅니다.');
     const s=await mutate(s=>{s.opened[id]=Date.now();});
-    if(s.settings.consent&&s.statuses[id]?.auto)await enqueue(id,{auto:true});return {};
+    const st=s.statuses[id],now=Date.now();if(now-(lastOpened.get(id)||0)<10_000)return {};lastOpened.set(id,now);
+    if(s.settings.consent&&st?.auto&&!['complete','queued','running','summarizing','awaiting_confirmation','done'].includes(st?.state))await enqueue(id,{auto:true});return {};
   }
 }
 chrome.runtime.onMessage.addListener((m,sender,reply)=>{

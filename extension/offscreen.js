@@ -32,7 +32,9 @@ async function run(job) {
 
   // 이어서 할 때는 마지막으로 확정된 슬라이드 끝에서 다시 시작한다(그 뒤 데이터는 지움).
   const prevSlides = await store.byLecture('slides', contentId);
-  const resumeAt = prevSlides.length ? prevSlides[prevSlides.length - 1].end : 0;
+  // 슬라이드가 있으면 마지막 슬라이드 끝에서, 없으면(음성만·화면 디코딩 실패) 저장된 진행 지점에서 이어간다(독립 검토 F10).
+  const savedLec = await store.get('lectures', contentId);
+  const resumeAt = prevSlides.length ? prevSlides[prevSlides.length - 1].end : (savedLec?.progressSec || 0);
   await store.deleteFrom(contentId, resumeAt);
   lec = { ...lec, state: 'running', progressSec: resumeAt, error: null, asrModel };
   await store.put('lectures', lec);
@@ -41,17 +43,28 @@ async function run(job) {
   const mp4 = await openMp4(src, lec.mediaUrl);
   const end = mp4.duration;
   status(contentId, { step: '받아쓰기 모델 불러오는 중' });
+  let lastPct = -1, lastPctAt = 0; // 저장소 쓰기 폭주 방지(독립 검토 F5)
   const asr = await loadAsr(asrModel, (p) => {
-    if (p.status === 'progress' && p.total > 5e6) status(contentId, { step: `모델 받는 중 ${Math.round(p.progress)}%` });
+    if (p.status === 'progress' && p.total > 5e6) {
+      const pct = Math.round(p.progress), now = Date.now();
+      if (pct !== lastPct && now - lastPctAt >= 1000) { lastPct = pct; lastPctAt = now; status(contentId, { step: `모델 받는 중 ${pct}%` }); }
+    }
   });
   const det = createSlideDetector();
+  let slideCount = prevSlides.length;
+  const skippedVideo = [];
+  const mmss = (x) => `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
   try {
   for (let t = resumeAt; t < end; t += WINDOW) {
     if (cancelled.has(contentId)) { cancelled.delete(contentId); throw Object.assign(new Error('사용자가 중지함'), { paused: true }); }
     const t1 = Math.min(end, t + WINDOW);
-    const w = await fetchWindow(src, mp4, t, t1, { slideEvery: 2 });
-    const pcm=await decodeAudio16k(mp4,w.audio);
-    const frames=await decodeKeyframes(mp4,w.keyframes);
+    // 일시적 실패(네트워크·디코더 경합)는 구간 단위로 한 번 더 시도한다.
+    // 슬라이드(비디오)만 계속 실패하면 그 구간 슬라이드만 건너뛰고 받아쓰기는 이어간다.
+    const w = await retryOnce(() => fetchWindow(src, mp4, t, t1, { slideEvery: 2 }), `영상 받기(${mmss(t)}~${mmss(t1)})`, [3000, 10000, 30000]);
+    const pcm = await retryOnce(() => decodeAudio16k(mp4, w.audio), `음성 디코딩(${mmss(t)}~${mmss(t1)})`);
+    let frames = [];
+    try { frames = await retryOnce(() => decodeKeyframes(mp4, w.keyframes), `화면 디코딩(${mmss(t)}~${mmss(t1)})`); }
+    catch (e) { skippedVideo.push(`${mmss(t)}~${mmss(t1)}`); console.warn('slide decode skipped', e); }
     const finished = det.push(frames);
     if (t1 >= end) finished.push(...det.finish(end));
     try {
@@ -65,13 +78,40 @@ async function run(job) {
     await store.putMany('slides', slideRows);
     lec.progressSec = t1;
     await store.put('lectures', lec);
-    status(contentId, { state: 'running', progress: t1 / end, step: `받아쓰는 중 ${Math.round((t1 / end) * 100)}%` });
+    slideCount += slideRows.length;
+    // 패널의 실시간 확인용: 방금 받아쓴 마지막 두 문장과 지금까지의 슬라이드 수. 이 PC 안에서만 오간다.
+    const preview = segs.slice(-2).map((s) => `${mmss(s.start)} ${s.text}`).join('\n').slice(0, 400);
+    status(contentId, { state: 'running', progress: t1 / end, step: `받아쓰는 중 ${Math.round((t1 / end) * 100)}%`, preview, slides: slideCount });
     } finally { for(const slide of finished)slide.bitmap.close(); }
   }
   lec.state = 'done';
   await store.put('lectures', lec);
-  status(contentId, { state: 'done', progress: 1, step: '완료' });
+  status(contentId, { state: 'done', progress: 1, step: skippedVideo.length ? `완료 · 일부 구간 슬라이드 없음(${skippedVideo.slice(0, 3).join(', ')}${skippedVideo.length > 3 ? ' 외' : ''})` : '완료' });
   } finally { det.dispose(); }
+}
+
+async function retryOnce(fn, what, waits = [1500]) {
+  let last;
+  for (let i = 0; i <= waits.length; i++) {
+    try { return await fn(); }
+    catch (e) { if (e?.paused) throw e; last = e; if (i < waits.length) await new Promise((r) => setTimeout(r, waits[i])); }
+  }
+  throw Object.assign(new Error(`${what} 실패: ${last?.message || last}`), { cause: last });
+}
+
+// 학생이 읽고 바로 행동할 수 있는 문장으로 바꾼다. 원문은 끝에 짧게 붙여 문의할 때 쓰게 한다.
+function friendlyError(e) {
+  const raw = String(e?.message || e || '').slice(0, 160);
+  let msg = '처리 중 문제가 생겼어요. "다시 시도"를 눌러 보세요.';
+  if (/progressive mp4|지원하지 않는 콘텐츠/.test(raw)) msg = '이 강의는 지원하지 않는 영상 형식이에요(문서·외부 링크 강의 등).';
+  else if (/moov|faststart/.test(raw)) msg = '이 강의 영상은 구조상 부분 처리가 어려워요.';
+  else if (/HTTP 40[134]/.test(raw)) msg = '강의 영상에 접근할 수 없어요. KLAS에서 강의를 다시 열어 본 뒤 다시 시도하세요.';
+  else if (/HTTP|fetch|network|Failed to fetch|영상 받기/i.test(raw)) msg = '강의 영상을 받지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.';
+  else if (/디코딩|Decoding|EncodingError|decode/i.test(raw)) msg = '영상 해석에 실패했어요. 강의를 재생 중이면 잠시 후 다시 시도하세요.';
+  else if (/bad_alloc|memory|OOM|Out of memory/i.test(raw)) msg = '메모리가 부족해요. 다른 탭을 닫거나 설정에서 받아쓰기 모델을 base로 바꾼 뒤 다시 시도하세요.';
+  else if (/webgpu|GPU|device lost/i.test(raw)) msg = 'GPU 처리 중 문제가 생겼어요. Chrome을 다시 열고 다시 시도하세요.';
+  else if (/model|onnx|huggingface|모델/i.test(raw)) msg = '받아쓰기 모델을 받지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.';
+  return `${msg} (${raw})`.slice(0, 300);
 }
 
 async function pump() {
@@ -82,9 +122,10 @@ async function pump() {
     await run(running);
   } catch (e) {
     const paused = !!e.paused;
+    if (!paused) await releaseAsr().catch(() => {}); // GPU 손실·메모리 부족 뒤 같은 모델 재사용 방지(독립 검토 F7)
     const lec = await store.get('lectures', running.contentId);
     if (lec) await store.put('lectures', { ...lec, state: paused ? 'paused' : 'error', error: paused ? null : String(e.message || e) });
-    status(running.contentId, { state: paused ? 'paused' : 'error', step: paused ? '일시정지' : `오류: ${e.message || e}` });
+    status(running.contentId, paused ? { state: 'paused', step: '일시정지' } : { state: 'error', step: '오류 · 다시 시도할 수 있어요', error: friendlyError(e) });
   } finally {
     running = null;
     if(queue.length) pump();
@@ -102,6 +143,7 @@ async function loadGroups(contentId) {
 
 const handlers = {
   async ping() { return { gpu: !!navigator.gpu }; },
+  async jobs() { return { running: running?.contentId ?? null, queued: queue.map((j) => j.contentId) }; },
   async lecture({ contentId }) { return { item: await store.get('lectures', contentId) }; },
   async getSummary({ contentId }) { return { item: await store.get('summaries', contentId) }; },
   async saveSummary({ contentId, item }) { await store.put('summaries', { ...item, contentId }); return {}; },
@@ -116,9 +158,9 @@ const handlers = {
   },
   async cancel({ contentId }) {
     const i = queue.findIndex((j) => j.contentId === contentId);
-    if (i >= 0) { queue.splice(i, 1); status(contentId, { state: 'paused', step: '일시정지' }); }
-    else if (running?.contentId === contentId) cancelled.add(contentId);
-    return { ok: true };
+    if (i >= 0) { queue.splice(i, 1); status(contentId, { state: 'paused', step: '일시정지' }); return { found: true }; }
+    if (running?.contentId === contentId) { cancelled.add(contentId); return { found: true }; }
+    return { found: false };
   },
   async pack({ contentId, preset, provider }) {
     const { lecture, slides, segments } = await loadGroups(contentId);

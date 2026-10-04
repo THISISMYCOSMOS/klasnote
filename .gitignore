@@ -8,3 +8,4 @@ extension/vendor/
 .env.*
 .codex/
 /샘플*.html
+dist/

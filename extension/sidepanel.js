@@ -170,6 +170,19 @@ function buildItem(contentId, status, metadata, opened) {
     li.appendChild(step);
   }
 
+  if (status && PROGRESS_STATES.has(state) && status.preview) {
+    const live = document.createElement('div');
+    live.className = 'sp-item__live';
+    const head = document.createElement('div');
+    head.className = 'sp-item__live-head';
+    head.textContent = `최근 받아쓰기 · 슬라이드 ${Number(status.slides) || 0}장`;
+    const body = document.createElement('div');
+    body.className = 'sp-item__live-body';
+    body.textContent = String(status.preview).slice(0, 400);
+    live.append(head, body);
+    li.appendChild(live);
+  }
+
   if(!opened){const hint=document.createElement('div');hint.className='sp-item__hint';hint.textContent='보기로 강의를 한 번 열어주세요.';li.appendChild(hint);}
 
   if (status && state === 'error' && status.error) {

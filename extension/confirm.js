@@ -195,6 +195,8 @@ function init() {
   });
 
   window.addEventListener('pagehide', () => {
+    // 패널을 X로 닫아도 다음에 열 때 지난 강의 확인 화면이 남지 않게 목록으로 되돌린다(독립 검토 F3).
+    if (inPanel) chrome.runtime.sendMessage({ target: 'bg', type: 'resetPanel' }).catch(() => {});
     destroyed = true;
     if (pendingPrepareTimer) { clearTimeout(pendingPrepareTimer); pendingPrepareTimer = null; }
     scene?.destroy();

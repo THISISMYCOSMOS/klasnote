@@ -1,5 +1,5 @@
 // kwcommons 강의 mp4에서 필요한 구간의 오디오(PCM 16kHz)와 키프레임(슬라이드 후보)을 뽑는다.
-// 전제(실측): progressive mp4, moov가 앞쪽(faststart), H.264 + AAC, 키프레임 약 1초 간격.
+// 전제(실측 31강): progressive mp4, H.264 + AAC(44.1/48kHz), 키프레임 약 2초 간격. moov 위치는 앞·끝 모두 있음.
 // 전역 MP4Box(vendor/mp4box.all.js)가 먼저 로드되어 있어야 한다.
 
 const KW = 'https://kwcommons.kw.ac.kr';
@@ -26,46 +26,90 @@ export async function loadContentInfo(src, contentId) {
   const q = (sel) => doc.querySelector(sel)?.textContent?.trim() ?? '';
   const title = q('content_metadata > title');
   const duration = Number(q('content_playing_info > content_duration')) || 0;
-  const mediaFile = q('main_media');
-  const uriTpl = [...doc.querySelectorAll('service_root media_uri')]
-    .find((n) => n.getAttribute('method') === 'progressive')?.textContent?.trim();
-  if (!mediaFile || !uriTpl) throw new Error('지원하지 않는 콘텐츠 형식입니다 (progressive mp4 없음).');
-  return { contentId, title, duration, mediaUrl: uriTpl.replace('[MEDIA_FILE]', mediaFile) };
+  // 형식 1(upf): story의 main_media 파일명 + service_root의 progressive 주소 템플릿
+  // 형식 2(video1): main_media > desktop|mobile > html5 안에 method=progressive와 완성된 media_uri (실측 2026-10-04)
+  let mediaUrl = null;
+  const html5 = [...doc.querySelectorAll('main_media desktop html5, main_media mobile html5')]
+    .find((n) => n.querySelector('method')?.textContent?.trim() === 'progressive');
+  if (html5) mediaUrl = html5.querySelector('media_uri')?.textContent?.trim() || null;
+  if (!mediaUrl) {
+    const list = doc.querySelector('main_media_list');
+    const def = list?.getAttribute('default_media_id');
+    const file = (def && list.querySelector(`main_media[media_id="${CSS.escape(def)}"]`)?.textContent?.trim())
+      || doc.querySelector('main_media_list main_media')?.textContent?.trim();
+    const tpl = [...doc.querySelectorAll('service_root media_uri')]
+      .find((n) => n.getAttribute('method') === 'progressive')?.textContent?.trim();
+    if (file && tpl && !/[/\\]/.test(file)) mediaUrl = tpl.replace('[MEDIA_FILE]', file);
+  }
+  if (!mediaUrl || !mediaUrl.startsWith(`${KW}/`) || !/\.mp4(\?|$)/i.test(mediaUrl)) {
+    throw new Error('지원하지 않는 콘텐츠 형식입니다 (progressive mp4 없음).');
+  }
+  return { contentId, title, duration, mediaUrl };
 }
 
-// mp4 앞부분(ftyp+moov)만 받아 트랙과 샘플 표를 만든다.
-export async function openMp4(src, mediaUrl) {
-  const head = await src.getRange(mediaUrl, 0, 65535);
-  let off = 0, moovEnd = 0;
-  const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
-  while (off + 8 <= head.length) {
-    const size = dv.getUint32(off);
-    const type = String.fromCharCode(...head.subarray(off + 4, off + 8));
-    if (type === 'moov') { moovEnd = off + size; break; }
-    if (size < 8) break;
+// 최상위 박스를 머리(최대 16바이트)만 읽으며 건너뛰어 ftyp와 moov 위치를 찾는다.
+// 실측(2026-10-04, 31강): screen.mp4는 moov가 앞(faststart), ssmovie.mp4는 moov가 파일 끝에 있다. 둘 다 지원한다.
+const MAX_MOOV = 64 * 1024 * 1024;
+async function locateBoxes(src, url) {
+  const head = await src.getRange(url, 0, 65535);
+  const readHeader = async (off) => {
+    if (off + 16 <= head.length) return head.subarray(off, off + 16);
+    const h = await src.getRange(url, off, off + 15);
+    return h.length >= 8 ? h : null;
+  };
+  let off = 0, ftyp = null;
+  for (let i = 0; i < 64; i++) {
+    const h = await readHeader(off);
+    if (!h) break;
+    const dv = new DataView(h.buffer, h.byteOffset, h.byteLength);
+    let size = dv.getUint32(0);
+    const type = String.fromCharCode(...h.subarray(4, 8));
+    if (size === 1) {
+      if (h.length < 16) break;
+      size = Number(dv.getBigUint64(8)); // 64비트 크기(긴 mdat)
+    } else if (size === 0) {
+      break; // 파일 끝까지 이어지는 박스. 그 뒤에 moov가 있을 수 없다.
+    }
+    if (size < 8 || !Number.isSafeInteger(off + size)) break;
+    if (type === 'ftyp' && off + size <= head.length) ftyp = head.slice(off, off + size);
+    if (type === 'moov') {
+      if (size > MAX_MOOV) throw new Error('moov가 너무 큽니다.');
+      const moov = off + size <= head.length ? head.slice(off, off + size) : await src.getRange(url, off, off + size - 1);
+      if (moov.length !== size) throw new Error('moov를 끝까지 받지 못했습니다.');
+      return { ftyp, moov };
+    }
     off += size;
   }
-  if (!moovEnd) throw new Error('moov가 파일 앞쪽에 없습니다 (faststart 아님).');
-  const moov = moovEnd <= head.length ? head.subarray(0, moovEnd) : await src.getRange(mediaUrl, 0, moovEnd - 1);
+  throw new Error('moov를 찾지 못했습니다 (지원하지 않는 mp4 구조).');
+}
+
+// ftyp+moov만 받아 트랙과 샘플 표를 만든다. 샘플 위치(stco/co64)는 원래 파일 기준 절대 위치라
+// moov가 파일 끝에 있어도 [ftyp][moov]를 이어 붙여 해석하면 그대로 쓸 수 있다.
+export async function openMp4(src, mediaUrl) {
+  const { ftyp, moov } = await locateBoxes(src, mediaUrl);
+  const joined = new Uint8Array((ftyp?.length || 0) + moov.length);
+  if (ftyp) joined.set(ftyp, 0);
+  joined.set(moov, ftyp?.length || 0);
 
   const file = MP4Box.createFile(false);
   const info = await new Promise((resolve, reject) => {
     file.onReady = resolve;
     file.onError = reject;
-    const ab = moov.buffer.slice(moov.byteOffset, moov.byteOffset + moov.byteLength);
+    const ab = joined.buffer;
     ab.fileStart = 0;
     file.appendBuffer(ab);
     file.flush();
   });
   const vInfo = info.tracks.find((t) => t.video);
   const aInfo = info.tracks.find((t) => t.audio);
-  if (!vInfo || !aInfo) throw new Error('오디오 또는 비디오 트랙이 없습니다.');
-  const vTrak = file.getTrackById(vInfo.id);
+  if (!aInfo) throw new Error('오디오 트랙이 없어 받아쓸 수 없습니다.');
   const aTrak = file.getTrackById(aInfo.id);
+  const vTrak = vInfo ? file.getTrackById(vInfo.id) : null;
   return {
     mediaUrl,
     duration: info.duration / info.timescale,
-    video: { info: vInfo, samples: vTrak.samples, description: codecDescription(vTrak) },
+    // 비디오가 없는 강의(음성만)는 슬라이드 없이 받아쓰기만 한다.
+    video: vTrak ? { info: vInfo, samples: vTrak.samples, description: codecDescription(vTrak) } : null,
     audio: { info: aInfo, samples: aTrak.samples, description: aacDescription(aTrak) },
   };
 }
@@ -92,7 +136,7 @@ export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2 } = {}) {
   const aS = mp4.audio.samples.filter((s) => { const t = sec(s, mp4.audio); return t >= t0 && t < t1; });
   const vS = [];
   let next = t0;
-  for (const s of mp4.video.samples) {
+  for (const s of mp4.video?.samples ?? []) {
     if (!s.is_sync) continue;
     const t = sec(s, mp4.video);
     if (t < t0 || t >= t1) continue;
@@ -162,6 +206,7 @@ async function resample(pcm, from, to) {
 // 키프레임 → { ts, bitmap } (가로 maxWidth로 축소)
 export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280 } = {}) {
   const out = [];
+  if (!mp4.video || !keyframes.length) return out;
   const { width, height } = mp4.video.info.video;
   const scale = Math.min(1, maxWidth / width);
   const w = Math.round(width * scale), h = Math.round(height * scale);
@@ -177,7 +222,11 @@ export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280 } = {}) 
     error: (e) => { failure=e; },
   });
   try {
-  dec.configure({ codec: mp4.video.info.codec, codedWidth: width, codedHeight: height, description: mp4.video.description });
+  // 슬라이드용 키프레임은 2초에 1장뿐이라 CPU로 충분하다. 강의 재생과 GPU 디코더를 다투지 않게 소프트웨어를 우선한다.
+  const base = { codec: mp4.video.info.codec, codedWidth: width, codedHeight: height, description: mp4.video.description };
+  const soft = { ...base, hardwareAcceleration: 'prefer-software' };
+  const supported = await VideoDecoder.isConfigSupported(soft).then((r) => r.supported, () => false);
+  dec.configure(supported ? soft : base);
   // 키프레임만 독립 디코딩한다. 각 키프레임 뒤에 flush해 출력을 확정한다.
   for (const k of keyframes) {
     dec.decode(new EncodedVideoChunk({ type: 'key', timestamp: Math.round(k.ts * 1e6), data: k.data }));

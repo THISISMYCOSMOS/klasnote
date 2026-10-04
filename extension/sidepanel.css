@@ -196,3 +196,8 @@ html, body {
   padding: 10px 4px;
   margin: 0;
 }
+
+/* 처리 중 실시간 확인: 최근 받아쓴 문장 */
+.sp-item__live { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--paper-2, rgba(128,82,93,.08)); font-size: 11px; }
+.sp-item__live-head { color: var(--ink-soft); margin-bottom: 2px; }
+.sp-item__live-body { white-space: pre-line; line-height: 1.5; max-height: 4.5em; overflow: hidden; }
