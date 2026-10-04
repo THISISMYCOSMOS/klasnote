@@ -7,15 +7,14 @@ import { buildReport } from './src/core/report.js';
 import * as store from './src/core/store.js';
 
 const WINDOW = 120; // 초. 이 단위로 받고 저장한다.
-const src = createSource(fetch);
 const queue = [];
 let running = null;
-let idleTimer = null;
+let activeAbort = null;
 const cancelled = new Set();
 
 // ---- 받아쓰기 작업자 풀 ----
-// 작업자마다 모델을 따로 갖고 동시에 돈다. GPU가 있고 강의를 재생 중이 아니면 2개, 아니면 1개를 쓴다.
-const MAX_WORKERS = 2;
+// 모델을 중복으로 올리지 않는다. GPU/CPU 모두 한 작업자만 사용한다.
+const MAX_WORKERS = 1;
 let workers = [];
 let workersModel = null;
 let gpuOk = true;
@@ -34,6 +33,7 @@ function createWorker() {
     if (data.ok) p.res(data);
     else {
       const error = new Error(data.error || '받아쓰기 작업자 오류');
+      if (data.code) error.code = data.code;
       if (data.stack) error.stack = data.stack;
       p.rej(error);
     }
@@ -58,13 +58,13 @@ function createWorker() {
   return item;
 }
 function terminateWorkers() { for (const w of workers) w.terminate(); workers = []; workersModel = null; }
-// 재생 중에는 새 병렬 작업을 보내지 않는다. 이미 실행 중인 작업자는 끝난 직후 정리한다.
+// 사용하지 않는 작업자는 종료한다.
 function trimWorkers(n) {
   for (let i = workers.length - 1; i >= n; i--) {
     if (!workers[i].busy) { workers[i].terminate(); workers.splice(i, 1); }
   }
 }
-// 필요한 수만큼 모델을 불러 둔다. 첫 작업자가 모델 파일을 받아 캐시한 뒤 둘째를 띄워 중복 다운로드를 피한다.
+// 다음 대기 강의에서도 같은 모델을 재사용하고, 모델 설정이 달라지면 이전 작업자를 해제한다.
 async function ensureWorkers(n, asrModel, onProgress) {
   if (workersModel !== asrModel) terminateWorkers();
   workersModel = asrModel;
@@ -92,11 +92,18 @@ const status = (contentId, patch) => chrome.runtime.sendMessage({ target: 'bg', 
 
 async function run(job) {
   const { contentId, asrModel } = job;
+  const controller = new AbortController();
+  const signal = controller.signal;
+  activeAbort = controller;
+  const src = createSource((url, init) => fetch(url, { ...init, signal }));
+  let prefetched = null;
   const checkCancel = () => { if (cancelled.has(contentId)) { cancelled.delete(contentId); throw Object.assign(new Error('사용자가 중지함'), { paused: true }); } };
+  try {
   checkCancel();
   let lec = await store.get('lectures', contentId);
   if (!lec) {
     const info = await loadContentInfo(src, contentId);
+    checkCancel();
     // 제목은 서버(content.php) 값을 우선한다. 페이지에서 온 값은 표시용 보조 정보로만 쓴다(레드팀 R3).
     const extra = job.meta ?? {};
     lec = { ...info, title: info.title || String(extra.title || '').slice(0, 200), course: String(extra.course || '').slice(0, 100),
@@ -146,6 +153,7 @@ async function run(job) {
       await store.putMany('slides', slideRows);
       lec.progressSec = job.t1;
       await store.put('lectures', lec);
+      checkCancel();
       slideCount += slideRows.length;
       // 패널의 실시간 확인용: 방금 받아쓴 마지막 두 문장과 지금까지의 슬라이드 수. 이 PC 안에서만 오간다.
       const preview = segs.slice(-2).map((s) => `${mmss(s.start)} ${s.text}`).join('\n').slice(0, 400);
@@ -153,17 +161,33 @@ async function run(job) {
       status(contentId, { state: 'running', progress: job.t1 / end, step: `받아쓰는 중 ${Math.round((job.t1 / end) * 100)}% · ${dev}${n > 1 ? ` · 동시 ${n}개` : ''}`, preview, slides: slideCount });
     } finally { for (const slide of job.finished) slide.bitmap.close(); }
   };
+  const fetchPart = (t, t1, speculative = false) => retryOnce(
+    () => fetchWindow(src, mp4, t, t1, { slideEvery: 2, signal, maxBytes: speculative ? 32 * 1024 * 1024 : Infinity }),
+    `영상 받기(${mmss(t)}~${mmss(t1)})`, [3000, 10000, 30000], signal,
+  );
   try {
   for (let t = resumeAt; t < end; t += WINDOW) {
     checkCancel();
     const t1 = Math.min(end, t + WINDOW);
     // 일시적 실패(네트워크·디코더 경합)는 구간 단위로 한 번 더 시도한다.
     // 슬라이드(비디오)만 계속 실패하면 그 구간 슬라이드만 건너뛰고 받아쓰기는 이어간다.
-    const w = await retryOnce(() => fetchWindow(src, mp4, t, t1, { slideEvery: 2 }), `영상 받기(${mmss(t)}~${mmss(t1)})`, [3000, 10000, 30000]);
-    const pcm = await retryOnce(() => decodeAudio16k(mp4, w.audio), `음성 디코딩(${mmss(t)}~${mmss(t1)})`);
+    let w;
+    if (prefetched?.t === t) {
+      const next = prefetched;
+      prefetched = null;
+      const result = await next.p;
+      checkCancel();
+      if (result.error?.code === 'PREFETCH_LIMIT') w = await fetchPart(t, t1);
+      else if (result.error) throw result.error;
+      else w = result.value;
+    } else w = await fetchPart(t, t1);
+    checkCancel();
+    const pcm = await retryOnce(() => decodeAudio16k(mp4, w.audio, { signal }), `음성 디코딩(${mmss(t)}~${mmss(t1)})`, [1500], signal);
+    checkCancel();
     let frames = [];
-    try { frames = await retryOnce(() => decodeKeyframes(mp4, w.keyframes), `화면 디코딩(${mmss(t)}~${mmss(t1)})`); }
-    catch (e) { skippedVideo.push(`${mmss(t)}~${mmss(t1)}`); console.warn('slide decode skipped', e); }
+    try { frames = await retryOnce(() => decodeKeyframes(mp4, w.keyframes, { signal }), `화면 디코딩(${mmss(t)}~${mmss(t1)})`, [1500], signal); }
+    catch (e) { if (signal.aborted || e?.paused) throw e; skippedVideo.push(`${mmss(t)}~${mmss(t1)}`); console.warn('slide decode skipped', e); }
+    if (signal.aborted) { for (const frame of frames) frame.bitmap.close(); checkCancel(); }
     const finished = det.push(frames);
     if (t1 >= end) finished.push(...det.finish(end));
     const n = parallelNow();
@@ -182,13 +206,20 @@ async function run(job) {
     p.catch(() => {}); // 저장 단계(commit)에서 처리한다
     inflight.push({ t, t1, finished, p });
     queued = true;
+    // ASR 한 개가 도는 동안 다음 구간의 압축 데이터만 받는다. 추가 PCM·슬라이드·모델은 만들지 않는다.
+    if (t + WINDOW < end) {
+      const nextT = t + WINDOW;
+      prefetched = { t: nextT, p: fetchPart(nextT, Math.min(end, nextT + WINDOW), true).then(value => ({ value }), error => ({ error })) };
+    }
     } finally { if (!queued) for (const slide of finished) slide.bitmap.close(); }
     // 동시에 돌릴 수 있는 개수를 넘으면 가장 오래된 구간이 끝나길 기다려 저장한다.
     while (inflight.length >= parallelNow()) await commit(inflight.shift());
   }
   while (inflight.length) await commit(inflight.shift());
+  checkCancel();
   lec.state = 'done';
   await store.put('lectures', lec);
+  checkCancel();
   status(contentId, { state: 'done', progress: 1, step: skippedVideo.length ? `완료 · 일부 구간 슬라이드 없음(${skippedVideo.slice(0, 3).join(', ')}${skippedVideo.length > 3 ? ' 외' : ''})` : '완료' });
   completed = true;
   } finally {
@@ -197,13 +228,29 @@ async function run(job) {
     for (const job of inflight) for (const slide of job.finished) slide.bitmap.close();
     det.dispose();
   }
+  } finally {
+    controller.abort();
+    if (prefetched) { await prefetched.p; prefetched = null; }
+    if (activeAbort === controller) activeAbort = null;
+  }
 }
 
-async function retryOnce(fn, what, waits = [1500]) {
+async function retryOnce(fn, what, waits = [1500], signal) {
   let last;
   for (let i = 0; i <= waits.length; i++) {
+    if (signal?.aborted) throw Object.assign(new Error('사용자가 중지함'), { paused: true });
     try { return await fn(); }
-    catch (e) { if (e?.paused) throw e; last = e; if (i < waits.length) await new Promise((r) => setTimeout(r, waits[i])); }
+    catch (e) {
+      if (signal?.aborted || e?.paused || e?.name === 'AbortError' || e?.code === 'PREFETCH_LIMIT') throw e;
+      last = e;
+      if (i < waits.length) await new Promise((resolve, reject) => {
+        const finish = () => { signal?.removeEventListener('abort', abort); resolve(); };
+        const timer = setTimeout(finish, waits[i]);
+        const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(Object.assign(new Error('사용자가 중지함'), { paused: true })); };
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+    }
   }
   throw Object.assign(new Error(`${what} 실패: ${last?.message || last}`), { cause: last });
 }
@@ -213,6 +260,8 @@ function friendlyError(e) {
   const raw = String(e?.message || e || '').slice(0, 160);
   let msg = '처리 중 문제가 생겼어요. "다시 시도"를 눌러 보세요.';
   if (/progressive mp4|지원하지 않는 콘텐츠/.test(raw)) msg = '이 강의는 지원하지 않는 영상 형식이에요(문서·외부 링크 강의 등).';
+  else if (e?.code === 'ASR_REPETITION' || /받아쓰기 반복/.test(raw)) msg = '이 구간에서 받아쓰기가 같은 말을 반복했어요. 잘못된 반복 결과는 저장하지 않았습니다. 다시 시도해 주세요.';
+  else if (e?.code === 'ASR_GENERATION_LIMIT') msg = '이 구간의 받아쓰기를 끝까지 읽지 못했어요. 불완전한 결과는 저장하지 않았습니다. 다시 시도해 주세요.';
   else if (/moov|faststart/.test(raw)) msg = '이 강의 영상은 구조상 부분 처리가 어려워요.';
   else if (/HTTP 40[134]/.test(raw)) msg = '강의 영상에 접근할 수 없어요. KLAS에서 강의를 다시 열어 본 뒤 다시 시도하세요.';
   else if (/HTTP|fetch|network|Failed to fetch|영상 받기/i.test(raw)) msg = '강의 영상을 받지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.';
@@ -225,7 +274,6 @@ function friendlyError(e) {
 
 async function pump() {
   if (running || !queue.length) return;
-  clearTimeout(idleTimer);
   running = queue.shift();
   try {
     await run(running);
@@ -240,7 +288,7 @@ async function pump() {
   } finally {
     running = null;
     if(queue.length) pump();
-    else idleTimer = setTimeout(() => { if(!running && !queue.length) terminateWorkers(); }, 30_000);
+    else terminateWorkers(); // 모든 대기 강의가 끝나면 모델을 즉시 해제한다. 노트 생성에는 모델이 필요 없다.
   }
 }
 
@@ -264,7 +312,7 @@ const handlers = {
   async enqueue({ contentId, meta, asrModel }) {
     if (running?.contentId === contentId || queue.some((j) => j.contentId === contentId)) return { queued: true };
     cancelled.delete(contentId);
-    queue.push({ contentId, meta, asrModel: asrModel === 'base' ? 'base' : 'small' });
+    queue.push({ contentId, meta, asrModel: asrModel === 'small' ? 'small' : 'base' });
     status(contentId, { state: 'queued', step: '대기 중' });
     pump();
     return { queued: true };
@@ -274,6 +322,7 @@ const handlers = {
     if (i >= 0) { queue.splice(i, 1); status(contentId, { state: 'paused', step: '일시정지' }); return { found: true }; }
     if (running?.contentId === contentId) {
       cancelled.add(contentId);
+      activeAbort?.abort(); // 영상·메타데이터 요청과 재시도 대기도 함께 중지한다.
       terminateWorkers(); // 다음 2분 구간까지 기다리지 않고 모델 메모리를 반납한다.
       return { found: true };
     }

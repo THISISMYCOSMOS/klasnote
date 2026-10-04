@@ -1,6 +1,14 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>klasnote engine harness</title>
+<button id="cancel">중지</button>
+<button id="resume">같은 저장 지점에서 재개</button>
+<button id="queue-next" disabled>다음 강의 대기 등록</button>
+<button id="jobs">현재 실행·대기 목록 확인</button>
+<button id="checkpoint">저장 상태 확인</button>
+<button id="quality">12분 반복 구간 확인</button>
+<button id="report">로컬 HTML 보고서 확인</button>
+<a id="report-link" hidden target="_blank">HTML 보고서 열기</a>
 <pre id="log" style="font:12px monospace;white-space:pre-wrap"></pre>
 <script>
 // 개발용: 뷰어나 출석 API 없이 실제 offscreen 엔진과 콘솔 스택을 검증한다.
@@ -30,22 +38,47 @@ window.fetch = (u, init) => String(u).startsWith('https://kwcommons.kw.ac.kr/')
   ? realFetch('/proxy?u=' + encodeURIComponent(String(u)), init) : realFetch(u, init);
 const base = new URL('../extension/', location.href).href;
 const OriginalWorker = window.Worker;
+const liveWorkers = new Set();
+let workerSeq = 0;
 window.Worker = class extends OriginalWorker {
   constructor(...args) {
     super(...args);
+    this.testId = ++workerSeq;
+    this.commands = new Map();
+    liveWorkers.add(this);
+    log(`worker ${this.testId} created; live=${liveWorkers.size}`);
     this.addEventListener('message', ({ data }) => {
       if (data.diagnostic) log('worker: ' + data.diagnostic);
+      if (data.ok !== undefined) {
+        const command = this.commands.get(data.id);
+        if (command) {
+          log(`worker ${this.testId} ${command.cmd} ${data.ok ? 'OK' : 'FAIL'} offset=${command.offset ?? '-'} elapsed=${((performance.now() - command.at) / 1000).toFixed(2)}s device=${data.device || '-'} dtype=${data.decoderDtype || '-'} segments=${data.segs?.length ?? '-'} live=${liveWorkers.size}`);
+          this.commands.delete(data.id);
+        }
+      }
     });
     this.addEventListener('error', (e) => log('worker error: ' + e.message));
+  }
+  postMessage(data, ...args) {
+    this.commands.set(data.id, { cmd: data.cmd, offset: data.offset, at: performance.now() });
+    return super.postMessage(data, ...args);
+  }
+  terminate() {
+    super.terminate();
+    if (liveWorkers.delete(this)) log(`worker ${this.testId} terminated; live=${liveWorkers.size}`);
   }
 };
 window.chrome = { runtime: {
   id: 'harness', getURL: (p) => base + p,
   sendMessage: async (m) => {
     if (m.target === 'bg' && m.type === 'status') {
-      if (m.patch.step) log(m.patch.step);
-      if (m.patch.error) log(m.patch.error);
-      if (m.patch.state === 'done') log('PASS: full lecture completed');
+      if (m.patch.step) log(`${m.contentId}: ${m.patch.step}`);
+      if (m.patch.error) log(`${m.contentId}: ${m.patch.error}`);
+      if (m.patch.state === 'done') {
+        log('PASS: full lecture completed');
+        window.inspectCheckpoint?.(m.contentId);
+      }
+      if (m.patch.state === 'paused') window.inspectCheckpoint?.(m.contentId);
     }
     return { ok: true };
   },
@@ -57,14 +90,50 @@ window.__call = (cmd, data = {}) => new Promise((res) =>
 <script src="../extension/vendor/mp4box.all.js"></script>
 <script type="module">
 await import('../extension/offscreen.js');
+const store = await import('../extension/src/core/store.js');
 log('GPU adapter: ' + JSON.stringify(await window.__call('ping')));
 const id = qs.get('id');
 if (!/^[0-9a-f]{8,32}$/i.test(id || '')) throw new Error('강의 contentId가 필요합니다.');
+const enqueue = async () => log(JSON.stringify(await window.__call('enqueue', { contentId: id, meta: {}, asrModel: qs.get('model') || 'base' })));
+window.inspectCheckpoint = async (contentId = id) => {
+  const [lec, segments, slides] = await Promise.all([store.get('lectures', contentId), store.byLecture('segments', contentId), store.byLecture('slides', contentId)]);
+  const ordered = segments.every((s, i) => i === 0 || s.start >= segments[i - 1].start);
+  log('checkpoint ' + JSON.stringify({ contentId, title: lec?.title, state: lec?.state, progressSec: lec?.progressSec, duration: lec?.duration, segments: segments.length, slides: slides.length, ordered, textChars: segments.reduce((n, s) => n + (s.text?.length || 0), 0), lastSegmentEnd: segments.at(-1)?.end, liveWorkers: liveWorkers.size }));
+};
+document.getElementById('cancel').onclick = async () => {
+  const jobs = await window.__call('jobs');
+  const contentId = jobs.running || id;
+  log('cancel ' + contentId + ' ' + JSON.stringify(await window.__call('cancel', { contentId })));
+};
+document.getElementById('resume').onclick = enqueue;
+document.getElementById('checkpoint').onclick = () => window.inspectCheckpoint();
+document.getElementById('quality').onclick = async () => {
+  for (const contentId of [id, qs.get('next')].filter(value => /^[0-9a-f]{8,32}$/i.test(value || ''))) {
+    const segments = await store.byLecture('segments', contentId);
+    const text = segments.filter(s => s.start < 780 && s.end > 720).map(s => s.text).join(' ');
+    log('quality ' + JSON.stringify({ contentId, interval: '12:00-13:00', chars: text.length, greetings: (text.match(/여러분 안녕하세요/g) || []).length, text: text.slice(0, 1600) }));
+  }
+};
+document.getElementById('jobs').onclick = async () => log('jobs ' + JSON.stringify(await window.__call('jobs')));
+const nextId = qs.get('next');
+if (/^[0-9a-f]{8,32}$/i.test(nextId || '') && nextId !== id) {
+  document.getElementById('queue-next').disabled = false;
+  document.getElementById('queue-next').onclick = async () => log('enqueue-next ' + nextId + ' ' + JSON.stringify(await window.__call('enqueue', { contentId: nextId, meta: {}, asrModel: qs.get('model') || 'base' })));
+}
+document.getElementById('report').onclick = async () => {
+  const result = await window.__call('report', { contentId: id, summary: null, meta: {} });
+  log('local report ' + JSON.stringify({ ok: result.ok, error: result.error }));
+  if (result.url) {
+    const link = document.getElementById('report-link');
+    link.href = result.url;
+    link.hidden = false;
+  }
+};
 if (qs.get('one') === '1') {
   // main에는 playerAlive가 없고, 병렬 브랜치에서는 작업자 1개를 강제한다.
   setInterval(() => window.__call('playerAlive'), 5000);
   window.__call('playerAlive');
 }
-log('enqueue');
-log(JSON.stringify(await window.__call('enqueue', { contentId: id, meta: {}, asrModel: qs.get('model') || 'small' })));
+if (qs.get('manual') === '1') await window.inspectCheckpoint();
+else { log('enqueue'); await enqueue(); }
 </script>

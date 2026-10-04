@@ -130,12 +130,11 @@ async function afterTranscription(id){
   const s=await state(),intent=s.statuses[id]?.intent;
   if(!intent||!s.settings.consent||!s.opened[id]||active.has(id)||deleted.has(id))return;
   if(intent.settingsKey!==settingsKey(s.settings)){await patch(id,{intent:null,state:'done',step:'설정 변경됨 · 수동 실행 가능'});return;}
-  const r=await prepare(id,intent.force);
-  if(r.pending)return;
-  if(intent.auto&&(r.local||r.cached||!s.settings.confirmBeforeSend))await summarize(id,r.requestId);
+  // 받아쓰기 완료만으로 요약·HTML 생성·CLI 감지를 시작하지 않는다. 사용자가 강의를 선택한 뒤 prepare/summarize한다.
+  await patch(id,{intent:null,ticket:null,state:'done',step:'받아쓰기 완료 · 선택하면 요약 노트를 만들어요'});
 }
 // '지금 요약'·'다시 시도': 받아쓰기가 아직이면 확인 화면 없이 처리만 시작한다. 끝나면 목록·패널에 '확인하고 저장'이 뜬다.
-// (로컬 전용이거나 '전송 전 확인'을 끈 경우엔 끝나자마자 자동 저장된다.)
+// 요약 노트는 완료된 강의를 사용자가 선택할 때만 만든다.
 async function startProcessing(id){
   const s=await state();
   if(!s.settings.consent){await chrome.tabs.create({url:SELF+'consent.html'});throw new Error('처음 실행 안내를 확인한 뒤 다시 눌러 주세요.');}

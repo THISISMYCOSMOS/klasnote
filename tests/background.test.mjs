@@ -108,12 +108,16 @@ test('AI success plus download failure retries cache without charging and fills 
   assert.equal(cache.provider,'claude');const retry=await send('prepareSummary',{contentId:id,force:false});assert.equal(retry.cached,true);assert.equal(retry.provider,'claude');assert.equal(retry.title,'테스트');assert.equal(retry.estimate.total,0);
   await send('download',{contentId:id});assert.equal(nativeCount,1);assert.equal(downloads,1);
 });
-test('manual local transcription completion waits for user confirmation, automatic local completion saves',async()=>{
-  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:false,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','gpt-5.6-terra','standard',true])}};
+test('transcription completion never creates a note or calls AI before explicit selection',async()=>{
   const engineSender={id:ext,url:self+'offscreen.html'};
-  await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,0);assert.ok(data.statuses[id].ticket);
-  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:true,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','gpt-5.6-terra','standard',true])}};
-  await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,1);assert.equal(nativeCount,0);
+  for(const mode of ['local','ai'])for(const auto of [false,true]){
+    reset();data.settings.mode=mode;data.settings.confirmBeforeSend=false;
+    data.statuses[id]={intent:{auto,force:false,settingsKey:JSON.stringify([mode,'claude','sonnet','gpt-5.6-terra','standard',false])}};
+    await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));
+    assert.equal(downloads,0);assert.equal(nativeCount,0);assert.equal(data.statuses[id].ticket,null);assert.equal(data.statuses[id].state,'done');
+  }
+  reset();data.settings.mode='local';const selected=await send('prepareSummary',{contentId:id});
+  await send('summarize',{contentId:id,requestId:selected.requestId});assert.equal(downloads,1);assert.equal(nativeCount,0);
 });
 
 test('confirm page polling never restarts processing, so a cancel is not undone',async()=>{

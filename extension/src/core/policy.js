@@ -1,5 +1,5 @@
 export const ID_RE = /^[0-9a-f]{8,32}$/i;
-export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'sonnet', codexModel:'gpt-5.6-terra', preset:'standard', confirmBeforeSend:true, asrModel:'small', motion:true});
+export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'sonnet', codexModel:'gpt-5.6-terra', preset:'standard', confirmBeforeSend:true, asrModel:'base', motion:true});
 export const CODEX_MODEL_RE = /^[a-z0-9][a-z0-9.\-]{1,40}$/;
 export const validId = id => typeof id === 'string' && ID_RE.test(id);
 export function cleanSettings(input, previous = DEFAULT_SETTINGS) {

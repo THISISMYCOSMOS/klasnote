@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS = {
   codexModel: 'gpt-5.6-terra',
   preset: 'standard',
   confirmBeforeSend: true,
-  asrModel: 'small',
+  asrModel: 'base',
   motion: true,
 };
 

@@ -4,16 +4,57 @@
 
 const KW = 'https://kwcommons.kw.ac.kr';
 
+const abortError = (signal) => signal?.reason ?? Object.assign(new Error('사용자가 중지함'), { name: 'AbortError' });
+function checkAbort(signal) { if (signal?.aborted) throw abortError(signal); }
+// 디코더와 렌더러가 늦게 끝나더라도 취소된 강의의 큐를 붙잡지 않는다.
+function abortable(promise, signal, onAbort) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => { try { onAbort?.(); } catch {} finish(reject, abortError(signal)); };
+    const finish = (settle, value) => { signal.removeEventListener('abort', abort); settle(value); };
+    Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+const prefetchLimit = () => Object.assign(new Error('다음 구간 미리 받기 메모리 한도'), { code: 'PREFETCH_LIMIT' });
+function discardBody(body) { try { Promise.resolve(body?.cancel()).catch(() => {}); } catch {} }
+
 // fetchImpl(url, init)을 주입받는다. 확장에서는 fetch, 개발 서버에서는 프록시 fetch.
 export function createSource(fetchImpl = fetch) {
-  async function getText(url) {
-    const r = await fetchImpl(url);
+  async function getText(url, { signal } = {}) {
+    const r = await fetchImpl(url, { signal });
     if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
     return r.text();
   }
-  async function getRange(url, start, endInclusive) {
-    const r = await fetchImpl(url, { headers: { Range: `bytes=${start}-${endInclusive}` } });
+  async function getRange(url, start, endInclusive, { signal, maxBytes = Infinity } = {}) {
+    const r = await fetchImpl(url, { headers: { Range: `bytes=${start}-${endInclusive}` }, signal });
     if (r.status !== 206 && r.status !== 200) throw new Error(`HTTP ${r.status} range ${url}`);
+    if (Number.isFinite(maxBytes)) {
+      // Range를 무시한 서버의 전체 파일은 미리 받지 않는다. 본문을 읽기 전에 버린다.
+      if (r.status !== 206 || Number(r.headers?.get('content-length')) > maxBytes || !r.body?.getReader) {
+        discardBody(r.body);
+        throw prefetchLimit();
+      }
+      const reader = r.body.getReader(), parts = [];
+      let size = 0, done = false, canceled = false;
+      const cancel = () => { if (canceled) return; canceled = true;try { Promise.resolve(reader.cancel()).catch(() => {}); } catch {} };
+      try {
+        while (true) {
+          checkAbort(signal);
+          const chunk = await abortable(reader.read(), signal, cancel);
+          checkAbort(signal);
+          if (chunk.done) { done = true; break; }
+          size += chunk.value.byteLength;
+          if (size > maxBytes) throw prefetchLimit();
+          parts.push(chunk.value);
+        }
+        const buf = new Uint8Array(size);
+        let offset = 0;
+        for (const part of parts) { buf.set(part, offset); offset += part.byteLength; }
+        return buf;
+      } finally { if (!done) cancel(); reader.releaseLock(); }
+    }
     return new Uint8Array(await r.arrayBuffer());
   }
   return { getText, getRange };
@@ -132,7 +173,7 @@ const sec = (s, track) => s.cts / track.info.timescale;
 
 // [t0, t1) 구간을 한 번의 Range 요청으로 받아 오디오 샘플과 키프레임 샘플을 잘라낸다.
 // slideEvery: 키프레임을 몇 초 간격으로 쓸지 (슬라이드 감지 해상도)
-export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2 } = {}) {
+export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2, signal, maxBytes = Infinity } = {}) {
   const aS = mp4.audio.samples.filter((s) => { const t = sec(s, mp4.audio); return t >= t0 && t < t1; });
   const vS = [];
   let next = t0;
@@ -146,7 +187,8 @@ export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2 } = {}) {
   if (!all.length) return { audio: [], keyframes: [], bytes: 0 };
   const start = Math.min(...all.map((s) => s.offset));
   const end = Math.max(...all.map((s) => s.offset + s.size));
-  const buf = await src.getRange(mp4.mediaUrl, start, end - 1);
+  if (end - start > maxBytes) throw prefetchLimit();
+  const buf = await src.getRange(mp4.mediaUrl, start, end - 1, { signal, maxBytes });
   const cut = (s) => buf.subarray(s.offset - start, s.offset - start + s.size);
   return {
     audio: aS.map((s) => ({ ts: sec(s, mp4.audio), dur: s.duration / mp4.audio.info.timescale, data: cut(s) })),
@@ -156,7 +198,8 @@ export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2 } = {}) {
 }
 
 // AAC 샘플 → 16kHz 모노 Float32Array
-export async function decodeAudio16k(mp4, samples) {
+export async function decodeAudio16k(mp4, samples, { signal } = {}) {
+  checkAbort(signal);
   if (!samples.length) return new Float32Array(0);
   const { sample_rate: rate, channel_count: ch } = mp4.audio.info.audio;
   const parts = [];
@@ -164,6 +207,7 @@ export async function decodeAudio16k(mp4, samples) {
   const dec = new AudioDecoder({
     output: (ad) => {
       try {
+      if (signal?.aborted) return;
       const n = ad.numberOfFrames, c = ad.numberOfChannels;
       const mono = new Float32Array(n);
       const tmp = new Float32Array(n);
@@ -181,17 +225,19 @@ export async function decodeAudio16k(mp4, samples) {
   for (const s of samples) {
     dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: Math.round(s.ts * 1e6), duration: Math.round(s.dur * 1e6), data: s.data }));
   }
-  await dec.flush();
+  await abortable(dec.flush(), signal, () => { if (dec.state !== 'closed') dec.close(); });
+  checkAbort(signal);
   if(failure)throw failure;
   } finally { if(dec.state!=='closed')dec.close(); }
   const total = parts.reduce((a, p) => a + p.length, 0);
   const pcm = new Float32Array(total);
   let o = 0;
   for (const p of parts) { pcm.set(p, o); o += p.length; }
-  return resample(pcm, rate, 16000);
+  return resample(pcm, rate, 16000, signal);
 }
 
-async function resample(pcm, from, to) {
+async function resample(pcm, from, to, signal) {
+  checkAbort(signal);
   if (!pcm.length) return pcm;
   const ctx = new OfflineAudioContext(1, Math.ceil(pcm.length * to / from), to);
   const ab = ctx.createBuffer(1, pcm.length, from);
@@ -200,23 +246,28 @@ async function resample(pcm, from, to) {
   node.buffer = ab;
   node.connect(ctx.destination);
   node.start();
-  return (await ctx.startRendering()).getChannelData(0);
+  const rendered = await abortable(ctx.startRendering(), signal);
+  checkAbort(signal);
+  return rendered.getChannelData(0);
 }
 
 // 키프레임 → { ts, bitmap } (가로 maxWidth로 축소)
-export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280 } = {}) {
+export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal } = {}) {
+  checkAbort(signal);
   const out = [];
   if (!mp4.video || !keyframes.length) return out;
   const { width, height } = mp4.video.info.video;
   const scale = Math.min(1, maxWidth / width);
   const w = Math.round(width * scale), h = Math.round(height * scale);
   const pending = [];
+  let discard = false;
   let failure = null;
   const dec = new VideoDecoder({
     output: (frame) => {
+      if (discard || signal?.aborted) { frame.close(); return; }
       const ts=frame.timestamp/1e6;
       pending.push(createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' })
-        .then((bitmap) => out.push({ ts, bitmap }),e=>{failure=e;})
+        .then((bitmap) => { if (discard || signal?.aborted) bitmap.close(); else out.push({ ts, bitmap }); },e=>{failure=e;})
         .finally(() => frame.close()));
     },
     error: (e) => { failure=e; },
@@ -225,16 +276,19 @@ export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280 } = {}) 
   // 슬라이드용 키프레임은 2초에 1장뿐이라 CPU로 충분하다. 강의 재생과 GPU 디코더를 다투지 않게 소프트웨어를 우선한다.
   const base = { codec: mp4.video.info.codec, codedWidth: width, codedHeight: height, description: mp4.video.description };
   const soft = { ...base, hardwareAcceleration: 'prefer-software' };
-  const supported = await VideoDecoder.isConfigSupported(soft).then((r) => r.supported, () => false);
+  const supported = await abortable(VideoDecoder.isConfigSupported(soft).then((r) => r.supported, () => false), signal);
+  checkAbort(signal);
   dec.configure(supported ? soft : base);
   // 키프레임만 독립 디코딩한다. 각 키프레임 뒤에 flush해 출력을 확정한다.
   for (const k of keyframes) {
     dec.decode(new EncodedVideoChunk({ type: 'key', timestamp: Math.round(k.ts * 1e6), data: k.data }));
-    await dec.flush();
+    await abortable(dec.flush(), signal, () => { if (dec.state !== 'closed') dec.close(); });
+    checkAbort(signal);
   }
-  await Promise.all(pending);
+  await abortable(Promise.all(pending), signal);
+  checkAbort(signal);
   if(failure)throw failure;
   return out.sort((a, b) => a.ts - b.ts);
-  } catch(e) { await Promise.all(pending);for(const f of out)f.bitmap.close();throw e; }
+  } catch(e) { discard = true;for(const f of out)f.bitmap.close();out.length = 0;throw e; }
   finally { if(dec.state!=='closed')dec.close(); }
 }
