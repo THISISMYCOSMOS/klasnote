@@ -220,6 +220,8 @@ export async function route(m,sender){
     throw new Error('목록에서 허용되지 않은 요청');
   }
   if(role==='player'){
+    // 강의 재생 중 신호: 처리 엔진이 떠 있을 때만 전달해 재생 중엔 받아쓰기를 1개로 줄인다(GPU 경합 방지).
+    if(m.type==='playerAlive'){const c=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT','TAB'],documentUrls:[SELF+'offscreen.html',SELF+'processor.html']});if(c.length)await rawEngine('playerAlive').catch(()=>{});return {};}
     if(m.type!=='lectureOpened')throw new Error('플레이어에서 허용되지 않은 요청');
     const id=requiredId(m.contentId),url=new URL(sender.url);
     const pathId=url.pathname.match(/^\/em\/([0-9a-f]{8,32})(?:\/|$)/i)?.[1];
