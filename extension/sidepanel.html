@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>KLAS 강의 요약 — 사이드패널</title>
+<link rel="stylesheet" href="campus.css" />
+<link rel="stylesheet" href="ui.css" />
+<link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+<div class="sp" id="sp">
+  <header class="sp-header">
+    <h1>KLAS 강의 요약</h1>
+    <button type="button" id="settingsBtn" class="btn btn--ghost btn--sm" aria-label="설정 열기">설정</button>
+  </header>
+
+  <p id="connBanner" class="sp-banner" role="status" aria-live="polite">확인 중…</p>
+  <p id="errorBanner" class="sp-banner sp-banner--error" role="alert" hidden></p>
+
+  <section id="setupCard" class="sp-card" hidden>
+    <p class="sp-card__text">아직 처리 방식을 선택하지 않았어요. 먼저 설정을 끝내주세요.</p>
+    <div class="actions-center">
+      <button type="button" id="setupBtn" class="btn btn--primary btn--sm">처음 설정 시작</button>
+    </div>
+  </section>
+
+  <section id="mainView" class="sp-main" hidden>
+    <div class="sp-toolbar">
+      <span id="modeLabel" class="sp-mode"></span>
+      <button type="button" id="helpBtn" class="btn btn--ghost btn--sm" aria-expanded="false" aria-controls="helpBox">사용방법</button>
+    </div>
+
+    <section id="helpBox" class="sp-help" hidden aria-label="사용 방법">
+      <div class="sp-help__head">
+        <h2>사용 방법</h2>
+        <button type="button" id="helpCloseBtn" class="sp-help__close" aria-label="사용 방법 닫기">✕</button>
+      </div>
+      <ol class="sp-help__steps">
+        <li>처음 설정에서 처리 방식을 선택해요.</li>
+        <li>KLAS 강의 목록에서 <strong>보기</strong>를 눌러 강의를 한 번 열어요.</li>
+        <li>강의별 <strong>자동 처리</strong>를 켜두거나, 필요할 때 <strong>지금 요약</strong>을 눌러요.</li>
+      </ol>
+      <p class="sp-help__note">AI는 본인 Claude/Codex 계정의 사용량을 씁니다. 전송 전 확인은 기본 켜짐입니다.</p>
+    </section>
+
+    <div id="campusHost" class="sp-campus" aria-label="우니와 광운대 캠퍼스 장면"></div>
+
+    <ul id="lectureList" class="sp-list" aria-label="강의별 처리 상태"></ul>
+    <p id="emptyMsg" class="sp-empty" hidden></p>
+  </section>
+</div>
+<script type="module" src="sidepanel.js"></script>
+</body>
+</html>

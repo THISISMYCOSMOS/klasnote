@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KLAS 강의 요약 — 전송 확인</title>
+<link rel="stylesheet" href="campus.css" />
+<link rel="stylesheet" href="ui.css" />
+<style>
+  .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 32px; }
+  .campus-host { margin-bottom: var(--space); max-width: 260px; }
+  .card { margin: 10px 0; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv dt { color: var(--ink-soft); }
+  .kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  table.estimate { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  table.estimate th, table.estimate td { text-align: left; padding: 5px 4px; border-bottom: 1px solid var(--border); }
+  table.estimate tr:last-child th, table.estimate tr:last-child td { font-weight: 700; border-bottom: none; }
+  .notice { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-top: 10px; }
+  .notice--cloud { background: #fde7df; color: var(--burgundy-deep); }
+  .notice--local { background: #e6efe2; color: var(--ok); }
+  .notice--muted { background: var(--bg-off); color: var(--ink-soft); }
+  .actions { display: flex; gap: var(--space); justify-content: center; margin-top: 16px; }
+  .status-line { margin-top: 12px; font-weight: 600; min-height: 1.4em; font-size: 13px; }
+  .status-line[data-k="error"] { color: var(--danger); }
+  .status-line[data-k="ok"] { color: var(--ok); }
+  .fine { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+  body.in-panel .wrap { padding: 10px; }
+  body.in-panel .campus-host { display: none; }
+  body.in-panel #backBtn { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button type="button" id="backBtn" class="btn btn--ghost btn--sm" hidden>강의 목록으로</button>
+  <div id="campusHost" class="campus-host" aria-label="우니와 광운대 캠퍼스 장면"></div>
+
+  <h1 id="pageTitle">요약 전송 확인</h1>
+  <p id="loadingMsg" class="fine">불러오는 중…</p>
+
+  <div id="content" hidden>
+    <section class="card" aria-labelledby="lec-h">
+      <h2 id="lec-h">강의</h2>
+      <dl class="kv">
+        <dt>제목</dt><dd id="lecTitle">-</dd>
+        <dt>전송 대상</dt><dd id="lecDest">-</dd>
+      </dl>
+    </section>
+
+    <section class="card" aria-labelledby="est-h">
+      <h2 id="est-h">예상 토큰(입력)</h2>
+      <table class="estimate">
+        <tbody>
+          <tr><th scope="row">본문 텍스트</th><td id="estText">-</td></tr>
+          <tr><th scope="row">슬라이드 이미지</th><td id="estImages">-</td></tr>
+          <tr><th scope="row">고정 오버헤드</th><td id="estOverhead">-</td></tr>
+          <tr><th scope="row">합계</th><td id="estTotal">-</td></tr>
+        </tbody>
+      </table>
+      <p class="fine">실측 기반 추정치이며, 실제 사용량은 달라질 수 있습니다.</p>
+    </section>
+
+    <p id="transNotice" class="notice"></p>
+
+    <div class="actions">
+      <button type="button" id="cancelBtn" class="btn btn--ghost">취소</button>
+      <button type="button" id="confirmBtn" class="btn btn--primary">보내기</button>
+    </div>
+    <p id="statusLine" class="status-line" role="status" aria-live="polite"></p>
+  </div>
+</div>
+<script type="module" src="confirm.js"></script>
+</body>
+</html>

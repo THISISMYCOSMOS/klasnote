@@ -1,0 +1,86 @@
+/* ui.css — 공유 디자인 토큰. 모든 페이지(consent/popup/options/confirm)가 이 파일을 불러와
+   동일한 타이포그래피/색/여백을 쓴다. 버건디는 강조색으로만 쓰고 배경은 중립 톤 유지. */
+:root {
+  --burgundy: #7a1f2e;
+  --burgundy-deep: #591521;
+  --ink: #2b2b2b;
+  --ink-soft: #666;
+  --bg: #ffffff;
+  --bg-off: #f7f6f4;
+  --border: #ddd8d2;
+  --danger: #b3261e;
+  --ok: #3f7a4e;
+  --space: 8px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg-off);
+  color: var(--ink);
+  font-family: system-ui, "Malgun Gothic", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+h1, h2, h3 { font-weight: 600; margin: 0 0 var(--space); }
+h1 { font-size: 18px; }
+h2 { font-size: 16px; }
+p { margin: 0 0 var(--space); }
+.hint { font-size: 12px; color: var(--ink-soft); margin: 4px 0 0; }
+
+.btn {
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+}
+.btn--primary { background: var(--burgundy); color: #fff; }
+.btn--primary:hover { background: var(--burgundy-deep); }
+.btn--primary:disabled { background: #cbb; cursor: not-allowed; }
+.btn--ghost { background: var(--bg); border-color: var(--border); color: var(--burgundy-deep); }
+.btn--ghost:hover { background: var(--bg-off); }
+.btn--danger { background: var(--bg); border-color: var(--danger); color: var(--danger); }
+.btn--danger:hover { background: #fbeceb; }
+.btn--sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+.btn:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid var(--burgundy); outline-offset: 2px;
+}
+
+.actions-center { display: flex; justify-content: center; margin: var(--space) 0; }
+.actions-row { display: flex; gap: var(--space); justify-content: center; }
+
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+select {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-off);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.status-badge[data-s="error"] { color: var(--danger); }
+.status-badge[data-s="complete"] { color: var(--ok); }
+.status-badge[data-s="awaiting_confirmation"] { color: var(--burgundy-deep); }
+
+details.more-details { margin-top: var(--space); font-size: 12px; }
+details.more-details summary { cursor: pointer; color: var(--burgundy-deep); font-weight: 600; }

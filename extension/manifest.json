@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "KLAS 강의 요약",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "description": "KLAS 온라인 강의를 PC 안에서 받아쓰고 슬라이드와 함께 정리합니다. 요약은 사용자의 Claude Code 또는 Codex로 실행합니다.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr5uxLZToLz3GeEs0L8FnML1So63CBEZUGX6GhFh+VQJaZxGEkgYsYX/KEjLNhIy282YlkMZeb2WuT9FsVqc7cUy+1LYv5S141GJ2VGbpQ7nC1Kqmav2oiUj9aRDr+fWKlyb2RMOQhEVruwgz4q6pIfSuMVisCRud6trBqEGONxUPYEwBmxri3i3uSwG1idXQrqeiBtCele5YkfxIOzAJCDKUskuhYd3rLfiXqUHkbHd2UqulkudzTet3yJMCBzgGXOD628h0Am7hOnFl1ArhayQSVD3VjUJp8jNva/Qz79fhr8bNztvJBTxJ0Dv+o3/hZ5isrFjtVf5KFCHGloBh6wIDAQAB",
+  "permissions": ["storage", "unlimitedStorage", "offscreen", "nativeMessaging", "downloads", "sidePanel"],
+  "host_permissions": ["https://kwcommons.kw.ac.kr/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "KLAS 강의 요약 패널 열기" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://klas.kw.ac.kr/*"],
+      "js": ["content/klas-status.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do*"],
+      "js": ["content/klas-list-main.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do*"],
+      "js": ["content/klas-list.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://kwcommons.kw.ac.kr/em/*", "https://kwcommons.kw.ac.kr/viewer/ssplayer/*"],
+      "js": ["content/kw-player.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

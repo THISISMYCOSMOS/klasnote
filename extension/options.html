@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KLAS 강의 요약 설정</title>
+<link rel="stylesheet" href="campus.css" />
+<link rel="stylesheet" href="ui.css" />
+<link rel="stylesheet" href="options.css" />
+</head>
+<body>
+<div class="page">
+  <header class="page-header">
+    <h1>설정</h1>
+    <p class="page-header__sub">AI 모드일 때만 대본·슬라이드가 전송됩니다.</p>
+  </header>
+
+  <section id="campusHost" class="campus-host" aria-label="우니와 광운대 캠퍼스 장면"></section>
+
+  <p id="connBanner" class="conn-banner" role="status" aria-live="polite">확인 중…</p>
+
+  <main class="cards">
+    <section class="card" aria-labelledby="ai-h">
+      <h2 id="ai-h">AI 연결</h2>
+
+      <div class="field-row">
+        <span class="field-label" id="provider-label">AI 공급자</span>
+        <div class="seg" role="radiogroup" aria-labelledby="provider-label">
+          <label class="seg__opt"><input type="radio" name="provider" value="auto" /> 자동</label>
+          <label class="seg__opt"><input type="radio" name="provider" value="claude" /> Claude</label>
+          <label class="seg__opt"><input type="radio" name="provider" value="codex" /> Codex</label>
+        </div>
+      </div>
+
+      <div class="field-row field-row--check">
+        <label class="check"><input type="checkbox" id="confirmBeforeSend" /> 전송 전 확인</label>
+      </div>
+
+      <div class="field-row field-row--check">
+        <label class="check"><input type="checkbox" id="motionToggle" /> 애니메이션</label>
+      </div>
+
+      <details class="more-details">
+        <summary>세부 설정 (모델 · 상세도 · 받아쓰기)</summary>
+        <div class="field-row">
+          <label class="field-label" for="claudeModel">Claude 모델</label>
+          <select id="claudeModel">
+            <option value="haiku">Haiku (빠름)</option>
+            <option value="sonnet">Sonnet (기본)</option>
+            <option value="opus">Opus (고품질)</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="preset">상세도</label>
+          <select id="preset">
+            <option value="save">절약 — 최대 10장</option>
+            <option value="standard">표준 — 최대 25장</option>
+            <option value="detail">상세 — 최대 60장</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label class="field-label" for="asrModel">받아쓰기 모델</label>
+          <select id="asrModel">
+            <option value="small">small (권장)</option>
+            <option value="base">base (더 빠름)</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <button type="button" id="detectBtn" class="btn btn--ghost btn--sm">자동 감지</button>
+          <button type="button" id="testBtn" class="btn btn--ghost btn--sm">연결 테스트</button>
+        </div>
+        <p id="detectResult" class="hint" aria-live="polite"></p>
+        <p id="testResult" class="hint" aria-live="polite"></p>
+      </details>
+
+      <div class="actions-row">
+        <button type="button" id="saveBtn" class="btn btn--primary btn--main">저장</button>
+      </div>
+      <p id="saveResult" class="hint" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="privacy-h">
+      <h2 id="privacy-h">개인정보</h2>
+      <p id="consentState" class="hint"></p>
+      <ul class="privacy-list privacy-list--compact">
+        <li><strong>로컬 전용</strong>: 받아쓰기·HTML 생성 모두 이 PC 안에서만 처리, 외부 전송 없음.</li>
+        <li><strong>AI 모드</strong>: 대본과 선택한 슬라이드만 본인이 로그인한 Claude/Codex 계정으로 전송(API 키 아님, 본인 사용량으로 집계).</li>
+      </ul>
+      <details class="more-details">
+        <summary>자세한 고지 · 약관</summary>
+        <ul class="privacy-list">
+          <li>이 도구는 개인 학습 정리를 돕기 위한 것이며, 생성된 요약이나 이 동의 절차가 저작권 등 어떠한 법적 권리를 보장하지 않습니다.</li>
+          <li>Codex 경로는 호출마다 약 1만 5천 토큰 내외의 고정 오버헤드가 추가로 발생합니다(실측치, 참고값).</li>
+          <li>마스코트 '우니' 그림은 광운대학교 공식 마스코트를 참고한 비공식 개인용 프로토타입 장식입니다. 정식 사용은 광운대학교의 사용 신청 및 2차 가공 심의가 필요하며, 이 화면은 그 승인을 받은 것이 아닙니다. 기준: <a href="https://news.kw.ac.kr/mascot/mascot.html" target="_blank" rel="noopener noreferrer">news.kw.ac.kr/mascot/mascot.html</a></li>
+        </ul>
+        <button type="button" id="openConsentBtn" class="btn btn--ghost btn--sm">동의 화면 다시 보기</button>
+      </details>
+    </section>
+
+    <section class="card" aria-labelledby="lib-h">
+      <h2 id="lib-h">내 강의 기록</h2>
+      <p class="hint">직접 한 번 이상 열어본 강의만 "지금 요약"을 쓸 수 있습니다.</p>
+      <ul id="lectureList" class="lecture-list"></ul>
+      <p id="libraryEmpty" class="hint" hidden>저장된 강의 기록이 없습니다.</p>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <p>KLAS 강의 요약 · 개인 학습용 비공식 확장 프로그램</p>
+  </footer>
+</div>
+
+<dialog id="confirmDialog" class="confirm-dialog">
+  <form method="dialog" id="confirmDialogForm">
+    <h2 id="confirmDialogTitle">확인</h2>
+    <p id="confirmDialogMsg"></p>
+    <div class="dialog-actions">
+      <button type="submit" value="cancel" class="btn btn--ghost">취소</button>
+      <button type="submit" value="ok" class="btn btn--primary">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="options.js"></script>
+</body>
+</html>

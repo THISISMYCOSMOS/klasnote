@@ -1,0 +1,10 @@
+node_modules/
+tmp/
+work/
+.claude/
+extension/vendor/
+*.log
+.env
+.env.*
+.codex/
+/샘플*.html

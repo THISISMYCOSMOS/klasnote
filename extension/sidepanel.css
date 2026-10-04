@@ -1,0 +1,198 @@
+/* sidepanel.css — 우측 도킹 사이드패널 전용 레이아웃.
+   ui.css 토큰(색/타이포/버튼)과 campus.css 컴포넌트를 그대로 재사용하고,
+   여기서는 패널 폭(320~480px)에 맞는 배치만 정의한다. 그라디언트/새 장식 없음. */
+
+html, body {
+  width: 100%;
+}
+.sp [hidden] { display: none !important; }
+
+.sp {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.sp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+}
+.sp-header h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.sp-banner {
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--ink-soft);
+}
+.sp-banner[data-state="off"] { background: #f7e9e3; color: var(--burgundy-deep); }
+.sp-banner[data-state="ok"] { color: var(--ok); }
+.sp-banner--error {
+  background: #fbeceb;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.sp-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 12px;
+}
+.sp-card__text { font-size: 13px; margin: 0 0 8px; }
+
+.sp-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space);
+}
+
+.sp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+}
+.sp-mode {
+  font-size: 12px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.sp-help {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-off);
+  padding: 8px 10px;
+}
+.sp-help__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+}
+.sp-help__head h2 { font-size: 13px; margin: 0; }
+.sp-help__close {
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.sp-help__close:hover { background: var(--border); }
+.sp-help__close:focus-visible { outline: 2px solid var(--burgundy); outline-offset: 2px; }
+.sp-help__steps {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sp-help__note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* 캠퍼스 장면: 폭에 비례해 커지지 않도록 최대 높이를 110px로 고정한다. */
+.sp-campus { display: flex; justify-content: center; }
+.sp-campus .campus-scene {
+  width: 100%;
+  max-width: 352px;
+  max-height: 110px;
+}
+
+.sp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sp-item__title { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.sp-item__sub { font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.sp-item__step { font-size: 11px; color: var(--ink-soft); }
+.sp-item__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sp-item__error {
+  font-size: 11px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.sp-item__hint {
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.sp-progress {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 7px;
+  accent-color: var(--burgundy);
+}
+.sp-progress__pct {
+  font-size: 11px;
+  color: var(--ink-soft);
+  min-width: 2.2em;
+  text-align: right;
+}
+
+.sp-mini-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--burgundy);
+  color: #fff;
+  flex-shrink: 0;
+}
+.sp-mini-btn:hover { background: var(--burgundy-deep); }
+.sp-mini-btn:focus-visible { outline: 2px solid var(--burgundy-deep); outline-offset: 2px; }
+.sp-mini-btn:disabled { background: #cbb; cursor: not-allowed; }
+
+.sp-empty {
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-align: center;
+  padding: 10px 4px;
+  margin: 0;
+}

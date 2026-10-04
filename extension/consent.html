@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KLAS 강의 요약 — 초기 설정</title>
+<link rel="stylesheet" href="campus.css" />
+<link rel="stylesheet" href="ui.css" />
+<style>
+  .wrap { max-width: 420px; margin: 0 auto; padding: 20px 16px 32px; }
+  .campus-host { margin-bottom: 8px; max-width: 260px; }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0 0 var(--space); }
+  legend { font-size: 12px; color: var(--ink-soft); padding: 0 4px; }
+  label.row { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; }
+  .notice-line { font-size: 12px; color: var(--ink); background: var(--bg-off); border-radius: 6px; padding: 8px 10px; margin: var(--space) 0; }
+  .personal-line { font-size: 12px; color: var(--ink-soft); margin: 4px 0 var(--space); }
+  .result { margin-top: var(--space); font-weight: 600; color: var(--ok); min-height: 1.2em; font-size: 13px; }
+  select#providerSel { width: 100%; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="campusHost" class="campus-host" aria-label="우니"></div>
+  <h1>처음 설정</h1>
+  <p class="personal-line">개인 학습용 비공식 도구입니다.</p>
+
+  <fieldset>
+    <legend>처리 방식</legend>
+    <label class="row"><input type="radio" name="mode" value="local" checked /> 로컬 전용 (전송 없음)</label>
+    <label class="row"><input type="radio" name="mode" value="ai" /> AI 모드</label>
+  </fieldset>
+
+  <div id="providerBlock" hidden>
+    <label for="providerSel" class="hint">초기 AI 공급자</label>
+    <select id="providerSel">
+      <option value="auto">자동</option>
+      <option value="claude">Claude</option>
+      <option value="codex">Codex</option>
+    </select>
+  </div>
+
+  <p id="noticeLine" class="notice-line" hidden>
+    AI 선택 시 대본·선택 슬라이드를 내 Claude/OpenAI 계정으로 전송하며 내 사용량을 씁니다.
+  </p>
+
+  <label class="row" id="confirmRow" hidden>
+    <input type="checkbox" id="confirmBeforeSend" checked /> 전송 전 확인
+  </label>
+
+  <div class="actions-center">
+    <button type="button" id="continueBtn" class="btn btn--primary">계속</button>
+  </div>
+  <p id="result" class="result" role="status" aria-live="polite"></p>
+
+  <details class="more-details">
+    <summary>자세한 고지 · 마스코트 안내</summary>
+    <p class="hint">
+      이 도구와 동의 절차는 저작권 등 법적 권리를 보장하지 않습니다. 강의 자료 저작권은 원 저작권자에게 있습니다.
+      마스코트 '우니'는 광운대학교 공식 마스코트를 참고한 비공식 개인용 장식이며 정식 사용 승인을 받은 것이 아닙니다.
+      기준: <a href="https://news.kw.ac.kr/mascot/mascot.html" target="_blank" rel="noopener noreferrer">news.kw.ac.kr/mascot/mascot.html</a>
+    </p>
+  </details>
+</div>
+<script type="module" src="consent.js"></script>
+</body>
+</html>
