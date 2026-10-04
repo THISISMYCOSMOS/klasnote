@@ -80,3 +80,6 @@ Verdict after resolution: confirmed exploit paths (R1, R2) closed and verified; 
 - Codex (terra, tools off) via host: 1 image + short prompt = **16,544 input / 372 output**.
 
 패널은 확장 아이콘 또는 상태 표시를 눌렀을 때 열립니다. 처리 완료 시 자동으로 열지 않습니다. KLAS 상단에 독립 상태 버튼을 두고, 상단 영역을 찾지 못하면 오른쪽 아래에 표시합니다. 상태 표시는 처리 중/확인 필요/오류/대기만 조회하며 요약 엔진을 시작하지 않습니다. KLAS Helper 전역 변수·스타일·이벤트를 사용하지 않습니다.
+
+## Delivery update — 2026-10-04
+A self-contained Windows installation ZIP includes vendor runtime and all four Uni PNGs. install.cmd runs scripts/setup.mjs with Node; no npm is needed for the installation ZIP. Stable extension installation target is %LOCALAPPDATA%/KlasSummarizer/extension. The user manually loads the unpacked extension in Chrome. Background14+installer3 in-process checks passed and required bundled files11 validated. Full installed Chrome flow remains unverified; native UI helper failed to initialize, a new preview navigation was denied, further Claude CLI/MCP execution was blocked by session permissions. Completed earlier Claude flow review is source-only; its proposed removal of explicitly user-selected automatic AI confirmation-OFF behavior was rejected as conflicting with approved scope. New frontend Red/Blue review is pending. See docs/verification.md.
