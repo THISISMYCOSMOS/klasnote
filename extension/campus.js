@@ -1,5 +1,5 @@
 // campus.js — 광운대 캠퍼스 장면 + 우니(마스코트) 모션 컴포넌트.
-// popup.js / options.js가 공용으로 불러 쓴다. 외부 의존성 없음, 전부 코드로 그린 원본 SVG.
+// sidepanel.js / options.js / confirm.js가 공용으로 불러 쓴다. 외부 의존성 없음, 전부 코드로 그린 원본 SVG.
 // innerHTML은 여기 정의된 고정(static) 마크업에만 쓰고, 페이지/서버/AI 데이터는 절대 넣지 않는다.
 
 const SPRITES = {

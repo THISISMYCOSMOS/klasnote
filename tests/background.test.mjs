@@ -124,3 +124,10 @@ test('confirm page polling never restarts processing, so a cancel is not undone'
   assert.equal(first.pending,true);assert.equal(enqueueCount,1);
   lectureState='done';
 });
+
+test('a lecture with KLAS progress counts as opened, one without progress does not',async()=>{
+  reset();delete data.opened[id];const other='fedcba9876543210';
+  const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:5}};
+  await route({type:'registerLectures',items:[{contentId:id,title:'들은 강의',prog:100},{contentId:other,title:'안 들은 강의',prog:0}]},listSender);
+  assert.ok(data.opened[id]);assert.equal(data.opened[other],undefined);
+});

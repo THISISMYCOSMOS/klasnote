@@ -1,4 +1,4 @@
-// sidepanel.js — 우측 도킹 사이드패널. popup.js와 같은 bg 메시지 계약을 쓰되,
+// sidepanel.js — 우측 도킹 사이드패널. options.js와 같은 bg 메시지 계약을 쓰되,
 // 강의별 상태(대기/진행/확인/완료/오류)를 더 자세히 보여준다.
 // 폴링 없음: stateChanged 브로드캐스트, storage 변경(화면이 보일 때만), visibilitychange에서만 갱신한다.
 import { mountCampusScene } from './campus.js';

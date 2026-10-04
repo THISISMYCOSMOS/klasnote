@@ -192,7 +192,9 @@ export async function route(m,sender){
     if(m.type==='getState')return state();
     if(m.type==='registerLectures'){
       if(!Array.isArray(m.items)||m.items.length>1000)throw new Error('강의 목록 오류');
-      await mutate(s=>{for(const item of m.items)if(validId(item.contentId))s.metadata[item.contentId.toLowerCase()]=cleanMeta(item);});return {};
+      // KLAS 진도가 0%보다 큰 강의는 학생이 이미 연 강의로 인정한다(설치 전에 다 들은 강의도 다시 열 필요 없음).
+      // 진도 값은 페이지가 주는 정보라 위조될 수 있지만, 이것만으로는 처리·전송이 시작되지 않고 학생의 클릭과 확인이 여전히 필요하다.
+      await mutate(s=>{for(const item of m.items)if(validId(item.contentId)){const id=item.contentId.toLowerCase();s.metadata[id]=cleanMeta(item);if(Number(item.prog)>0&&!s.opened[id])s.opened[id]=Date.now();}});return {};
     }
     if(m.type==='openOptions'){await chrome.runtime.openOptionsPage();return {};}
     const id=requiredId(m.contentId);

@@ -53,7 +53,7 @@
   }
   window.addEventListener('message',async e=>{
     if(e.source!==window||e.origin!==location.origin||e.data?.source!=='klas-summarizer:list:v1'||!Array.isArray(e.data.items)||e.data.items.length>1000)return;
-    const parsed=e.data.items.filter(x=>x&&typeof x.contentId==='string'&&valid.test(x.contentId)).map(x=>({contentId:x.contentId.toLowerCase(),title:String(x.title??'').slice(0,200),course:String(x.course??'').slice(0,100),professor:String(x.professor??'').slice(0,50),week:Number(x.week)||null,module:String(x.module??'').slice(0,200),period:String(x.period??'').slice(0,60)}));
+    const parsed=e.data.items.filter(x=>x&&typeof x.contentId==='string'&&valid.test(x.contentId)).map(x=>({contentId:x.contentId.toLowerCase(),title:String(x.title??'').slice(0,200),course:String(x.course??'').slice(0,100),professor:String(x.professor??'').slice(0,50),week:Number(x.week)||null,prog:Math.max(0,Math.min(100,Number(x.prog)||0)),module:String(x.module??'').slice(0,200),period:String(x.period??'').slice(0,60)}));
     const signature=JSON.stringify(parsed);if(signature===lastSignature)return;lastSignature=signature;items=parsed;
     try{await send('registerLectures',{items});await refresh();decorate();}catch{}
   });

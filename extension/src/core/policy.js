@@ -30,7 +30,7 @@ export function classifySender(sender,self,id) {
   const own=new URL(self);
   if(u.protocol===own.protocol&&u.host===own.host) {
     if(['/offscreen.html','/processor.html'].includes(u.pathname))return 'engine';
-    if(['/options.html','/popup.html','/sidepanel.html','/consent.html','/confirm.html'].includes(u.pathname))return 'ui';
+    if(['/options.html','/sidepanel.html','/consent.html','/confirm.html'].includes(u.pathname))return 'ui';
     return null;
   }
   if(!sender.tab||u.protocol!=='https:')return null;

@@ -19,7 +19,7 @@
       if(!id||!valid.test(id))return [];
       const title=String(row.sbjt??row.title??'').slice(0,200);
       const professor=String(row.professor??row.profNm??row.profName??data.professor??'').slice(0,50);
-      return [{contentId:id.toLowerCase(),title,course:String(row.course??selected).slice(0,100),professor,week:Number(row.weekNo)||null,module:String(row.moduletitle??'').slice(0,200),period:[row.sdate,row.edate].filter(Boolean).join(' ~ ').slice(0,60)}];
+      return [{contentId:id.toLowerCase(),title,course:String(row.course??selected).slice(0,100),professor,week:Number(row.weekNo)||null,prog:Math.max(0,Math.min(100,Number(row.prog)||0)),module:String(row.moduletitle??'').slice(0,200),period:[row.sdate,row.edate].filter(Boolean).join(' ~ ').slice(0,60)}];
     });
     const signature=JSON.stringify(items);if(signature===last)return;last=signature;
     window.postMessage({source:'klas-summarizer:list:v1',items},location.origin);
