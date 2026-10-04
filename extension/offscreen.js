@@ -81,7 +81,7 @@ async function run(job) {
     slideCount += slideRows.length;
     // 패널의 실시간 확인용: 방금 받아쓴 마지막 두 문장과 지금까지의 슬라이드 수. 이 PC 안에서만 오간다.
     const preview = segs.slice(-2).map((s) => `${mmss(s.start)} ${s.text}`).join('\n').slice(0, 400);
-    status(contentId, { state: 'running', progress: t1 / end, step: `받아쓰는 중 ${Math.round((t1 / end) * 100)}%`, preview, slides: slideCount });
+    status(contentId, { state: 'running', progress: t1 / end, step: `받아쓰는 중 ${Math.round((t1 / end) * 100)}% · ${asr.device === 'webgpu' ? 'GPU' : 'CPU'}`, preview, slides: slideCount });
     } finally { for(const slide of finished)slide.bitmap.close(); }
   }
   lec.state = 'done';
@@ -142,7 +142,8 @@ async function loadGroups(contentId) {
 }
 
 const handlers = {
-  async ping() { return { gpu: !!navigator.gpu }; },
+  // navigator.gpu가 있어도 이 문서에서 어댑터를 못 받으면 받아쓰기가 CPU(WASM)로 떨어져 3배 이상 느려진다(실측 추정).
+  async ping() { const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null; return { gpu: !!adapter }; },
   async jobs() { return { running: running?.contentId ?? null, queued: queue.map((j) => j.contentId) }; },
   async lecture({ contentId }) { return { item: await store.get('lectures', contentId) }; },
   async getSummary({ contentId }) { return { item: await store.get('summaries', contentId) }; },

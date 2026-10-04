@@ -13,6 +13,9 @@
       view.download.hidden=status.state!=='complete';
       const step=status.error||status.step||(opened?'개인 복습용':'한 번 열어야 요약 가능');
       if(view.status.textContent!==String(step).slice(0,200))view.status.textContent=String(step).slice(0,200);
+      const pct=Math.round((Number(status.progress)||0)*100);
+      const BADGE={complete:['✓ 처리 완료','ok'],done:['확인 필요','warn'],awaiting_confirmation:['확인 필요','warn'],running:[`처리 중 ${pct}%`,'busy'],queued:['대기 중','busy'],summarizing:['AI 요약 중','busy'],paused:['일시정지','idle'],error:['오류','err']}[status.state];
+      view.badge.hidden=!BADGE;if(BADGE){view.badge.textContent=BADGE[0];view.badge.dataset.kind=BADGE[1];}
       view.progress.hidden=!['queued','running','summarizing'].includes(status.state);
       view.progress.value=Number(status.progress)||0;
     }
@@ -36,7 +39,7 @@
       if(old){controls.delete(old.dataset.contentId);old.remove();}
       const cell=document.createElement('div');cell.dataset.klasSummarizerControl='';cell.dataset.contentId=match.contentId;
       const root=cell.attachShadow({mode:'closed'});
-      const style=document.createElement('style');style.textContent=':host{display:block;margin-top:6px;font:12px system-ui;color:#333}*{box-sizing:border-box}.ks-summary-tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.ks-summary-switch{display:flex;align-items:center;gap:4px;white-space:nowrap}.ks-summary-button{font:inherit;white-space:nowrap;word-break:keep-all;padding:3px 8px;border:1px solid #80525d;border-radius:4px;background:#fff;color:#633242;cursor:pointer}.ks-summary-button:disabled{opacity:.5;cursor:default}.ks-summary-button[hidden]{display:none}.ks-summary-download{background:#633242;color:#fff;border-color:#633242}.ks-summary-status{display:block;margin-top:3px;max-width:240px;word-break:keep-all;overflow-wrap:break-word}progress{display:block;width:100%;max-width:240px;height:5px}progress[hidden]{display:none}';root.append(style);
+      const style=document.createElement('style');style.textContent=':host{display:block;margin-top:6px;font:12px system-ui;color:#333}*{box-sizing:border-box}.ks-summary-tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.ks-summary-switch{display:flex;align-items:center;gap:4px;white-space:nowrap}.ks-summary-button{font:inherit;white-space:nowrap;word-break:keep-all;padding:3px 8px;border:1px solid #80525d;border-radius:4px;background:#fff;color:#633242;cursor:pointer}.ks-summary-button:disabled{opacity:.5;cursor:default}.ks-summary-button[hidden]{display:none}.ks-badge{display:inline-block;margin:0 0 4px;padding:1px 8px;border-radius:999px;font-weight:600;white-space:nowrap;border:1px solid transparent}.ks-badge[hidden]{display:none}.ks-badge[data-kind=ok]{background:#e6f4ea;color:#1e6b34;border-color:#a8d5b5}.ks-badge[data-kind=warn]{background:#fff4d6;color:#7a5200;border-color:#f0d58a}.ks-badge[data-kind=busy]{background:#e8f0fe;color:#1a4fa0;border-color:#b6ccf5}.ks-badge[data-kind=idle]{background:#f1f1f1;color:#555;border-color:#ddd}.ks-badge[data-kind=err]{background:#fdecea;color:#a12622;border-color:#f3b8b4}.ks-summary-download{background:#633242;color:#fff;border-color:#633242}.ks-summary-status{display:block;margin-top:3px;max-width:240px;word-break:keep-all;overflow-wrap:break-word}progress{display:block;width:100%;max-width:240px;height:5px}progress[hidden]{display:none}';root.append(style);
       const group=document.createElement('div');group.className='ks-summary-tools';
       const label=document.createElement('label');label.className='ks-summary-switch';
       const toggle=document.createElement('input');toggle.type='checkbox';const text=document.createElement('span');text.textContent='자동 처리';label.append(toggle,text);
@@ -44,8 +47,9 @@
       const download=document.createElement('button');download.type='button';download.className='ks-summary-button ks-summary-download';download.textContent='HTML 받기';download.title='저장된 결과로 HTML을 다시 받습니다 (AI 재호출 없음).';download.hidden=true;
       const status=document.createElement('span');status.className='ks-summary-status';status.setAttribute('role','status');
       const progress=document.createElement('progress');progress.max=1;progress.value=0;progress.setAttribute('aria-label','로컬 받아쓰기 진행률');
-      group.append(label,button,download);root.append(group,status,progress);[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='보기')?.parentElement.append(cell);
-      controls.set(match.contentId,{toggle,button,download,status,progress,title:match.title});
+      const badge=document.createElement('span');badge.className='ks-badge';badge.hidden=true;badge.setAttribute('role','status');
+      group.append(label,button,download);root.append(badge,group,status,progress);[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='보기')?.parentElement.append(cell);
+      controls.set(match.contentId,{toggle,button,download,status,progress,badge,title:match.title});
       download.addEventListener('click',async event=>{if(!event.isTrusted)return;download.disabled=true;try{await send('download',{contentId:match.contentId});status.textContent='다운로드 폴더의 KLAS요약에 저장했어요.';}catch(e){status.textContent=e.message;}finally{download.disabled=false;}});
       toggle.addEventListener('change',async event=>{if(!event.isTrusted){toggle.checked=!!current.statuses?.[match.contentId]?.auto;return;}toggle.disabled=true;try{await send('setAuto',{contentId:match.contentId,enabled:toggle.checked});await refresh();}catch(e){toggle.checked=!toggle.checked;status.textContent=e.message;}finally{toggle.disabled=false;}});
       button.addEventListener('click',async event=>{if(!event.isTrusted)return;button.disabled=true;try{const st=current.statuses?.[match.contentId]?.state;const ready=['done','awaiting_confirmation','complete'].includes(st);await send(ready?'manualSummary':'startProcessing',{contentId:match.contentId});if(!ready)status.textContent='처리를 시작했어요. 끝나면 "확인하고 저장"이 떠요.';}catch(e){status.textContent=e.message;}finally{button.disabled=!current.opened?.[match.contentId];}});
