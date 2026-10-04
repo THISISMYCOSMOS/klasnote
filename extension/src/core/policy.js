@@ -57,10 +57,17 @@ export function parseSummary(raw) {
   if(parsed.slides.length>3000)throw new Error('AI 슬라이드 수 초과');
   const bounded=(v,n)=>{if(typeof v!=='string')throw new Error('AI 텍스트 형식 오류');return v.slice(0,n);};
   const seen=new Set();
-  return {overview:bounded(parsed.overview,4000),slides:parsed.slides.map(row=>{
-    if(!Number.isInteger(row.s)||row.s<1||seen.has(row.s)||!Array.isArray(row.summary))throw new Error('AI 슬라이드 형식 오류');seen.add(row.s);
-    return {s:row.s,summary:row.summary.slice(0,3).map(v=>bounded(v,500)),comment:bounded(row.comment??'',1000)};
-  }),exam:parsed.exam.slice(0,10).map(v=>bounded(v,1000)),corrections:(Array.isArray(parsed.corrections)?parsed.corrections:[]).filter(x=>Array.isArray(x)&&x.length===2&&x.every(y=>typeof y==='string')&&x[0].length<=40&&x[1].length<=80).slice(0,40)};
+  // 사용량을 이미 쓴 뒤라, 형식이 어긋난 슬라이드 줄 하나 때문에 응답 전체를 버리지 않는다.
+  // 번호가 문자열이면 숫자로 읽고, 잘못된 줄·중복 번호는 건너뛴다(빈 칸은 background에서 채움).
+  const slides=[];
+  for(const row of parsed.slides){
+    const s=Number(row?.s);
+    if(!Number.isInteger(s)||s<1||seen.has(s))continue;
+    const summary=Array.isArray(row.summary)?row.summary:typeof row.summary==='string'?[row.summary]:[];
+    seen.add(s);
+    slides.push({s,summary:summary.filter(v=>typeof v==='string').slice(0,3).map(v=>v.slice(0,500)),comment:typeof row.comment==='string'?row.comment.slice(0,1000):''});
+  }
+  return {overview:bounded(parsed.overview,4000),slides,exam:parsed.exam.filter(v=>typeof v==="string").slice(0,10).map(v=>v.slice(0,1000)),corrections:(Array.isArray(parsed.corrections)?parsed.corrections:[]).filter(x=>Array.isArray(x)&&x.length===2&&x.every(y=>typeof y==='string')&&x[0].length<=40&&x[1].length<=80).slice(0,40)};
 }
 export function checkPayload(payload) {
   const bytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;

@@ -88,12 +88,15 @@ function renderReady(res, settings, host) {
   scene?.setState('study');
 }
 
+let polling = false; // 첫 요청 뒤에는 상태 확인만 한다(처리 재시작 금지)
 async function pollPrepare(settings, host, forceOverride = force) {
   if (destroyed) return;
-  const res = await callBg('prepareSummary', { contentId, force: forceOverride });
+  const res = await callBg('prepareSummary', { contentId, force: forceOverride, poll: polling });
   if (destroyed) return;
   if (res.ok === false) { fail(`준비 실패: ${res.error || ''}`); return; }
   if (res.pending) {
+    if (polling && ['paused', 'error'].includes(res.state)) { fail(res.state === 'paused' ? '처리가 중지됐어요. 강의 목록에서 "다시 시도"를 누르면 이어서 처리해요.' : '처리 중 오류가 났어요. 패널에서 이유를 확인하고 다시 시도하세요.'); return; }
+    polling = true;
     el('loadingMsg').textContent = '로컬 받아쓰기를 준비하는 중입니다… (잠시 후 자동으로 다시 확인)';
     pendingPrepareTimer = setTimeout(() => { pendingPrepareTimer = null; pollPrepare(settings, host, forceOverride); }, 3000);
     return;

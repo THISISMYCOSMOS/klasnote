@@ -4,7 +4,7 @@ import {DEFAULT_SETTINGS,classifySender,safeName,parseSummary,cleanSettings,chec
 
 const id='0123456789abcdef',ext='klihhclhnhhmldcbnkpampimkjafmbdm',self=`chrome-extension://${ext}/`;
 const ui={id:ext,url:self+'confirm.html?id='+id,tab:{id:1}};
-let data,nativeCount,downloads,cache,pack,engineCount,nativeDelay=5,downloadFailures=0,panelOpens=[];
+let data,nativeCount,downloads,cache,pack,engineCount,nativeDelay=5,downloadFailures=0,panelOpens=[],lectureState='done',enqueueCount=0;
 const clone=v=>structuredClone(v);
 const summary={overview:'개요',slides:[{s:1,summary:['핵심'],comment:'설명'}],exam:['점검'],corrections:[]};
 function reset(){data={settings:{...DEFAULT_SETTINGS,consent:true,mode:'ai',provider:'claude'},opened:{[id]:1},statuses:{},metadata:{[id]:{course:'과목',title:'강의'}}};nativeCount=0;downloads=0;cache=null;engineCount=0;pack={prompt:'강의: 테스트',images:[],slideCount:1,estimate:{total:2000}};}
@@ -16,7 +16,7 @@ globalThis.chrome={
     sendMessage:async m=>{
       if(m.target!=='offscreen')return;
       engineCount++;
-      switch(m.cmd){case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:'done',title:'테스트'}};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
+      switch(m.cmd){case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
     },
     connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage({ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
@@ -67,9 +67,13 @@ test('Windows output filenames and settings cannot bypass consent',()=>{
   assert.equal(cleanSettings({consent:true}).consent,false);assert.throws(()=>cleanSettings({mode:'remote'}));
   assert.throws(()=>checkPayload({x:'a'.repeat(64*1024*1024)}),/64 MiB/);
 });
-test('summary parsing handles quoted braces and rejects duplicate slide IDs',()=>{
+test('summary parsing handles quoted braces and drops duplicate or malformed slide rows instead of discarding a paid result',()=>{
   assert.equal(parseSummary('```json\n'+JSON.stringify({...summary,overview:'문자 { } " 내용'})+'\n```').slides.length,1);
-  assert.throws(()=>parseSummary(JSON.stringify({...summary,slides:[summary.slides[0],summary.slides[0]]})),/슬라이드/);
+  const dup=parseSummary(JSON.stringify({...summary,slides:[summary.slides[0],{...summary.slides[0],comment:'중복'},{s:'2',summary:['문자열 번호']},{s:0,summary:[]},{s:3,summary:'한 줄'}]}));
+  assert.deepEqual(dup.slides.map(x=>x.s),[1,2,3]);
+  assert.notEqual(dup.slides[0].comment,'중복');
+  assert.deepEqual(dup.slides[2].summary,['한 줄']);
+  assert.throws(()=>parseSummary('요약을 만들 수 없습니다'),/JSON/);
 });
 test('unopened lecture and missing consent block processing',async()=>{
   reset();delete data.opened[id];await assert.rejects(send('prepareSummary',{contentId:id}),/열어/);assert.equal(engineCount,0);
@@ -110,4 +114,13 @@ test('manual local transcription completion waits for user confirmation, automat
   await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,0);assert.ok(data.statuses[id].ticket);
   reset();data.settings.mode='local';data.statuses[id]={intent:{auto:true,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','standard',true])}};
   await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,1);assert.equal(nativeCount,0);
+});
+
+test('confirm page polling never restarts processing, so a cancel is not undone',async()=>{
+  reset();lectureState='running';enqueueCount=0;data.statuses[id]={state:'paused'};
+  const polled=await send('prepareSummary',{contentId:id,poll:true});
+  assert.equal(polled.pending,true);assert.equal(polled.state,'paused');assert.equal(enqueueCount,0);
+  const first=await send('prepareSummary',{contentId:id});
+  assert.equal(first.pending,true);assert.equal(enqueueCount,1);
+  lectureState='done';
 });

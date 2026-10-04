@@ -78,12 +78,14 @@ async function enqueue(id,{auto=false,force=false}={}){
   await engine('enqueue',{contentId:id,meta:s.metadata[id]??{},asrModel:s.settings.asrModel});
   return {pending:true};
 }
-async function prepare(id,force=false){
+async function prepare(id,force=false,{poll=false}={}){
   if(active.has(id))throw new Error('이 강의는 이미 처리 중입니다.');
   deleted.delete(id);
   const s=await allowed(id);
   const found=await engine('lecture',{contentId:id});
-  if(found.item?.state!=='done')return enqueue(id,{force});
+  // 확인 화면의 반복 확인(poll)은 상태만 보고 처리를 다시 시작하지 않는다. 그래야 '중지'가 3초 뒤 되살아나지 않고
+  // 처리 내내 저장소 쓰기가 반복되지 않는다. 처리 시작은 첫 요청에서만 한다.
+  if(found.item?.state!=='done'){if(poll)return {pending:true,state:s.statuses[id]?.state??null};return enqueue(id,{force});}
   const cached=await engine('getSummary',{contentId:id});
   const local=s.settings.mode==='local',useCache=!!cached.item&&!force;
   const provider=local?'local':useCache?cached.item.provider:await chooseProvider(s.settings);
@@ -150,7 +152,7 @@ const uiHandlers={
   async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT','TAB'],documentUrls:[SELF+'offscreen.html',SELF+'processor.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
   download:m=>download(requiredId(m.contentId)),
-  prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true),
+  prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
   openConfirm:(m,sender)=>openConfirm(requiredId(m.contentId),m.force===true,sender),
   async openOptions(){await chrome.runtime.openOptionsPage();return {};},
