@@ -75,8 +75,16 @@ function install(){
   const target=path.join(root,'extension'),staged=path.join(root,'extension.new'),old=path.join(root,'extension.old');
   fs.rmSync(staged,{recursive:true,force:true});fs.rmSync(old,{recursive:true,force:true});
   copyTree(path.join(source,'extension'),staged);
-  if(fs.existsSync(target))fs.renameSync(target,old);
-  fs.renameSync(staged,target);
+  try{
+    if(fs.existsSync(target))fs.renameSync(target,old);
+    fs.renameSync(staged,target);
+  }catch(e){
+    // 평소 Chrome이 이 폴더의 확장을 쓰는 중이면 Windows가 폴더 이름 바꾸기를 막을 수 있다.
+    // 그때는 다 받아 둔 새 파일을 제자리에 덮어쓴다(복사가 끝난 뒤라 중간 실패 위험은 작다).
+    if(!fs.existsSync(target)&&fs.existsSync(old))fs.renameSync(old,target);
+    copyTree(staged,target);
+    fs.rmSync(staged,{recursive:true,force:true});
+  }
   fs.rmSync(old,{recursive:true,force:true});
   fs.copyFileSync(path.join(source,'native-host/host.mjs'),path.join(root,'host.mjs'));
   if(P.platform==='win32'){
