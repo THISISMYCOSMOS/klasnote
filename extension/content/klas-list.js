@@ -48,7 +48,7 @@
       controls.set(match.contentId,{toggle,button,download,status,progress,title:match.title});
       download.addEventListener('click',async event=>{if(!event.isTrusted)return;download.disabled=true;try{await send('download',{contentId:match.contentId});status.textContent='다운로드 폴더의 KLAS요약에 저장했어요.';}catch(e){status.textContent=e.message;}finally{download.disabled=false;}});
       toggle.addEventListener('change',async event=>{if(!event.isTrusted){toggle.checked=!!current.statuses?.[match.contentId]?.auto;return;}toggle.disabled=true;try{await send('setAuto',{contentId:match.contentId,enabled:toggle.checked});await refresh();}catch(e){toggle.checked=!toggle.checked;status.textContent=e.message;}finally{toggle.disabled=false;}});
-      button.addEventListener('click',async event=>{if(!event.isTrusted)return;button.disabled=true;try{await send('manualSummary',{contentId:match.contentId});}catch(e){status.textContent=e.message;}finally{button.disabled=!current.opened?.[match.contentId];}});
+      button.addEventListener('click',async event=>{if(!event.isTrusted)return;button.disabled=true;try{const st=current.statuses?.[match.contentId]?.state;const ready=['done','awaiting_confirmation','complete'].includes(st);await send(ready?'manualSummary':'startProcessing',{contentId:match.contentId});if(!ready)status.textContent='처리를 시작했어요. 끝나면 "확인하고 저장"이 떠요.';}catch(e){status.textContent=e.message;}finally{button.disabled=!current.opened?.[match.contentId];}});
     });render();
   }
   window.addEventListener('message',async e=>{

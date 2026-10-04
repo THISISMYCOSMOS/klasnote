@@ -72,14 +72,14 @@ function mascotStateFor(statuses) {
 }
 
 function actionFor(contentId, status) {
-  if (!status?.state) return { label: '지금 요약', type: 'openConfirm', payload: { contentId, force: false } };
+  if (!status?.state) return { label: '지금 요약', type: 'startProcessing', payload: { contentId } };
   switch (status.state) {
     case 'awaiting_confirmation':
     case 'done':
       return { label: '확인하고 저장', type: 'openConfirm', payload: { contentId, force: false } };
     case 'paused':
     case 'error':
-      return { label: '다시 시도', type: 'openConfirm', payload: { contentId, force: false } };
+      return { label: '다시 시도', type: 'startProcessing', payload: { contentId } };
     case 'complete':
       return { label: 'HTML 다시 저장', type: 'download', payload: { contentId } };
     case 'running':

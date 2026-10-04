@@ -133,6 +133,14 @@ async function afterTranscription(id){
   if(r.pending)return;
   if(intent.auto&&(r.local||r.cached||!s.settings.confirmBeforeSend))await summarize(id,r.requestId);
 }
+// '지금 요약'·'다시 시도': 받아쓰기가 아직이면 확인 화면 없이 처리만 시작한다. 끝나면 목록·패널에 '확인하고 저장'이 뜬다.
+// (로컬 전용이거나 '전송 전 확인'을 끈 경우엔 끝나자마자 자동 저장된다.)
+async function startProcessing(id){
+  const s=await state();
+  if(!s.settings.consent){await chrome.tabs.create({url:SELF+'consent.html'});throw new Error('처음 실행 안내를 확인한 뒤 다시 눌러 주세요.');}
+  if(['queued','running','summarizing'].includes(s.statuses[id]?.state))return {pending:true};
+  return enqueue(id,{auto:true});
+}
 async function openConfirm(id,force=false,sender){
   // Start opening within the original content-script gesture, before awaiting storage.
   const opening=chrome.sidePanel&&sender?.tab?chrome.sidePanel.open({tabId:sender.tab.id}).then(()=>true,()=>false):Promise.resolve(false);
@@ -155,6 +163,7 @@ const uiHandlers={
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
   openConfirm:(m,sender)=>openConfirm(requiredId(m.contentId),m.force===true,sender),
+  startProcessing:m=>startProcessing(requiredId(m.contentId)),
   async openOptions(){await chrome.runtime.openOptionsPage();return {};},
   async resetPanel(){await chrome.sidePanel.setOptions({path:'sidepanel.html'});return {};},
 };
@@ -203,6 +212,7 @@ export async function route(m,sender){
       if(typeof m.enabled!=='boolean')throw new Error('스위치 값 오류');await patch(id,{auto:m.enabled});return {};
     }
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
+    if(m.type==='startProcessing')return startProcessing(id);
     // 목록의 'HTML 받기': 이미 완료된 강의만, 저장된 결과로 다시 만든다(AI 재호출 없음).
     if(m.type==='download'){const s=await state();if(s.statuses[id]?.state!=='complete')throw new Error('처리가 끝난 강의만 받을 수 있습니다.');return download(id);}
     throw new Error('목록에서 허용되지 않은 요청');

@@ -131,3 +131,14 @@ test('a lecture with KLAS progress counts as opened, one without progress does n
   await route({type:'registerLectures',items:[{contentId:id,title:'들은 강의',prog:100},{contentId:other,title:'안 들은 강의',prog:0}]},listSender);
   assert.ok(data.opened[id]);assert.equal(data.opened[other],undefined);
 });
+
+test('"지금 요약" on an unprocessed lecture starts processing without opening the confirm screen',async()=>{
+  reset();enqueueCount=0;panelOpens=[];panelPaths=[];
+  const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:9}};
+  const r=await route({type:'startProcessing',contentId:id},listSender);
+  assert.equal(r.pending,true);assert.equal(enqueueCount,1);assert.equal(panelOpens.length,0);assert.equal(panelPaths.length,0);
+  data.statuses[id]={state:'running'};
+  await route({type:'startProcessing',contentId:id},listSender);
+  assert.equal(enqueueCount,1,'already running: no second enqueue');
+  reset();data.settings.consent=false;await assert.rejects(route({type:'startProcessing',contentId:id},listSender),/안내/);
+});
