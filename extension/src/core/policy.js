@@ -61,7 +61,7 @@ export function parseSummary(raw) {
   }
   if(!parsed||!Array.isArray(parsed.slides)||typeof parsed.overview!=='string'||!Array.isArray(parsed.exam))throw new Error('AI가 올바른 요약 JSON을 반환하지 않았습니다');
   if(parsed.slides.length>3000)throw new Error('AI 슬라이드 수 초과');
-  const bounded=(v,n)=>{if(typeof v!=='string')throw new Error('AI 텍스트 형식 오류');return v.slice(0,n);};
+  const text=v=>{if(typeof v!=='string')throw new Error('AI 텍스트 형식 오류');return v;};
   const seen=new Set();
   // 사용량을 이미 쓴 뒤라, 형식이 어긋난 슬라이드 줄 하나 때문에 응답 전체를 버리지 않는다.
   // 번호가 문자열이면 숫자로 읽고, 잘못된 줄·중복 번호는 건너뛴다(빈 칸은 background에서 채움).
@@ -71,9 +71,9 @@ export function parseSummary(raw) {
     if(!Number.isInteger(s)||s<1||seen.has(s))continue;
     const summary=Array.isArray(row.summary)?row.summary:typeof row.summary==='string'?[row.summary]:[];
     seen.add(s);
-    slides.push({s,summary:summary.filter(v=>typeof v==='string').slice(0,3).map(v=>v.slice(0,500)),comment:typeof row.comment==='string'?row.comment.slice(0,1000):''});
+    slides.push({s,summary:summary.filter(v=>typeof v==='string'),comment:typeof row.comment==='string'?row.comment:''});
   }
-  return {overview:bounded(parsed.overview,4000),slides,exam:parsed.exam.filter(v=>typeof v==="string").slice(0,10).map(v=>v.slice(0,1000)),corrections:(Array.isArray(parsed.corrections)?parsed.corrections:[]).filter(x=>Array.isArray(x)&&x.length===2&&x.every(y=>typeof y==='string')&&x[0].length<=40&&x[1].length<=80).slice(0,40)};
+  return {overview:text(parsed.overview),slides,exam:parsed.exam.filter(v=>typeof v==="string"),corrections:(Array.isArray(parsed.corrections)?parsed.corrections:[]).filter(x=>Array.isArray(x)&&x.length===2&&x.every(y=>typeof y==='string')&&x[0].length<=40&&x[1].length<=80).slice(0,40)};
 }
 export function checkPayload(payload) {
   const bytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;

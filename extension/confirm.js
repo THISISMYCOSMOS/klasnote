@@ -68,7 +68,7 @@ function renderReady(res, settings, host) {
   const est = res.estimate || { text: 0, images: 0, overhead: 0, total: 0 };
   el('estText').textContent = `${nf.format(est.text || 0)} 토큰`;
   el('estImages').textContent = `${nf.format(est.images || 0)} 토큰`;
-  el('estOverhead').textContent = `${nf.format(est.overhead || 0)} 토큰 (고정)`;
+  el('estOverhead').textContent = `${nf.format(est.overhead || 0)} 토큰 (기본 추정)`;
   el('estTotal').textContent = `${nf.format(est.total || 0)} 토큰`;
 
   const notice = el('transNotice');
