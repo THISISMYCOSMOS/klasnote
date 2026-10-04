@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess=$true)]
+﻿[CmdletBinding(SupportsShouldProcess=$true)]
 param()
 $ErrorActionPreference='Stop'
 $installRoot=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'KlasSummarizer'))
