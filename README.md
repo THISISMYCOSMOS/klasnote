@@ -92,8 +92,8 @@ KLAS **온라인 강의 목록**의 각 강의 `보기` 버튼 아래에 클라�
 
 ![설정 화면](docs/images/03-options.png)
 
-- **AI 공급자**: 자동 / Claude / Codex. Codex는 `gpt-5.6-terra` 모델로 고정이에요.
-- **세부 설정**: Claude 모델(기본 Sonnet), 요약 상세도(절약·표준·상세), 받아쓰기 모델(기본 small, 느린 PC는 base)
+- **AI 공급자**: 자동 / Claude / Codex. **Codex 모델**도 고를 수 있어요(기본 GPT-5.6-Terra, 목록은 내 PC의 Codex 기준). ChatGPT 계정에서 안 되는 모델을 고르면 요약할 때 안내가 떠요(사용량 차감 없음).
+- **세부 설정**: Claude 모델(기본 Sonnet), Codex 모델(기본 GPT-5.6-Terra), 요약 상세도(절약·표준·상세), 받아쓰기 모델(기본 small, 느린 PC는 base)
 - **자동 감지**: Claude/Codex 설치 여부만 확인(토큰 0). **연결 테스트**는 실제 AI를 1번 불러요(약 2천 토큰).
 
 ## 7. 자주 묻는 질문

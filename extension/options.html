@@ -51,6 +51,13 @@
           </select>
         </div>
         <div class="field-row">
+          <label class="field-label" for="codexModel">Codex 모델</label>
+          <select id="codexModel">
+            <option value="gpt-5.6-terra">GPT-5.6-Terra (기본)</option>
+          </select>
+        </div>
+        <p class="hint" id="codexModelHint">목록은 이 PC의 Codex에서 불러와요. ChatGPT 계정에서 안 되는 모델은 요약할 때 안내가 떠요(사용량 차감 없음).</p>
+        <div class="field-row">
           <label class="field-label" for="preset">상세도</label>
           <select id="preset">
             <option value="save">절약 — 최대 10장</option>

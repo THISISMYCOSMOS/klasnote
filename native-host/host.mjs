@@ -11,7 +11,24 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 const CLAUDE_MODELS = new Set(['haiku', 'sonnet', 'opus']);
-const CODEX_MODEL = 'gpt-5.6-terra'; // 사용자 결정: Codex는 Terra 고정
+const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'; // 실측으로 ChatGPT 계정에서 동작 확인한 기본값
+
+// 이 PC의 Codex가 알고 있는 모델 목록(~/.codex/models_cache.json, 화면에 보이는 것만). 학생마다 다를 수 있다.
+function codexModelList() {
+  try {
+    const home = process.env.CODEX_HOME || join(homedir(), '.codex');
+    const j = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8'));
+    const arr = Array.isArray(j) ? j : Array.isArray(j.models) ? j.models : [];
+    return arr.filter((m) => m && m.visibility === 'list' && typeof m.slug === 'string' && /^[a-z0-9][a-z0-9.\-]{1,40}$/.test(m.slug))
+      .map((m) => ({ slug: m.slug, name: String(m.display_name || m.slug).slice(0, 60), description: String(m.description || '').slice(0, 120) }));
+  } catch { return []; }
+}
+// 기본값이거나 이 PC의 Codex 목록에 있는 모델만 받는다.
+function codexModel(requested) {
+  if (!requested || requested === CODEX_DEFAULT_MODEL) return CODEX_DEFAULT_MODEL;
+  if (codexModelList().some((m) => m.slug === requested)) return requested;
+  throw new Error('허용되지 않은 Codex 모델');
+}
 const TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_PROMPT = 400_000; // 문자
 const MAX_IMAGES = 80;
@@ -188,7 +205,8 @@ async function claude({ model, system, prompt, images }) {
   }
 }
 
-async function codex({ system, prompt, images }) {
+async function codex({ model, system, prompt, images }) {
+  const codexModelName = codexModel(model);
   const c = findCodex();
   if (!c) throw new Error('codex CLI를 찾지 못했습니다');
   const cwd = makeTemp();
@@ -206,7 +224,7 @@ async function codex({ system, prompt, images }) {
       'in_app_browser', 'computer_use', 'memories', 'code_mode_host', 'skill_search', 'skill_mcp_dependency_install',
       'tool_suggest', 'sleep_tool', 'shell_snapshot'].flatMap((f) => ['-c', `features.${f}=false`]);
     const args = [...c.pre, 'exec', '--json', '--skip-git-repo-check', '--ephemeral', '-s', 'read-only',
-      '-m', CODEX_MODEL, '-c', 'model_reasoning_effort="low"', '-c', 'mcp_servers={}', ...off, '-C', cwd, ...files, '-'];
+      '-m', codexModelName, '-c', 'model_reasoning_effort="low"', '-c', 'mcp_servers={}', ...off, '-C', cwd, ...files, '-'];
     const r = await run(c.cmd, args, { stdin: `${system}\n\n${prompt}`, cwd });
     let text = null, usage = null, fail = null;
     for (const l of r.out.split('\n')) {
@@ -215,6 +233,7 @@ async function codex({ system, prompt, images }) {
       if (j.type === 'turn.completed') usage = j.usage;
       if (j.type === 'turn.failed') fail = j.error?.message;
     }
+    if (fail && /not supported when using Codex with a ChatGPT account/i.test(String(fail))) throw new Error(`선택한 Codex 모델(${codexModelName})은 ChatGPT 계정에서 쓸 수 없어요. 설정에서 다른 Codex 모델을 고르세요.`);
     if (fail) throw new Error(`codex 오류: ${String(fail).slice(0, 500)}`);
     if (text == null) throw new Error(`codex 실행 실패 (code ${r.code}) ${r.err.slice(-500)}`);
     return { text, usage: { input: usage?.input_tokens || 0, output: (usage?.output_tokens || 0) + (usage?.reasoning_output_tokens || 0) } };
@@ -225,6 +244,8 @@ async function codex({ system, prompt, images }) {
 
 async function handle(m) {
   switch (m?.cmd) {
+    case 'codexModels':
+      return { ok: true, models: codexModelList(), defaultModel: CODEX_DEFAULT_MODEL };
     case 'detect':
       return { ok: true, claude: !!findClaude(), codex: !!findCodex() };
     case 'test': {

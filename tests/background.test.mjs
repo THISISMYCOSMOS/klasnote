@@ -109,10 +109,10 @@ test('AI success plus download failure retries cache without charging and fills 
   await send('download',{contentId:id});assert.equal(nativeCount,1);assert.equal(downloads,1);
 });
 test('manual local transcription completion waits for user confirmation, automatic local completion saves',async()=>{
-  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:false,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','standard',true])}};
+  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:false,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','gpt-5.6-terra','standard',true])}};
   const engineSender={id:ext,url:self+'offscreen.html'};
   await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,0);assert.ok(data.statuses[id].ticket);
-  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:true,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','standard',true])}};
+  reset();data.settings.mode='local';data.statuses[id]={intent:{auto:true,force:false,settingsKey:JSON.stringify(['local','claude','sonnet','gpt-5.6-terra','standard',true])}};
   await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));assert.equal(downloads,1);assert.equal(nativeCount,0);
 });
 
@@ -141,4 +141,11 @@ test('"지금 요약" on an unprocessed lecture starts processing without openin
   await route({type:'startProcessing',contentId:id},listSender);
   assert.equal(enqueueCount,1,'already running: no second enqueue');
   reset();data.settings.consent=false;await assert.rejects(route({type:'startProcessing',contentId:id},listSender),/안내/);
+});
+
+test('Codex model setting is validated and used for Codex requests only',()=>{
+  assert.equal(cleanSettings({codexModel:'gpt-5.6-luna'}).codexModel,'gpt-5.6-luna');
+  assert.equal(cleanSettings({}).codexModel,'gpt-5.6-terra');
+  assert.throws(()=>cleanSettings({codexModel:'evil; calc'}),/codexModel/);
+  assert.throws(()=>cleanSettings({codexModel:'../x'}),/codexModel/);
 });

@@ -1,5 +1,6 @@
 export const ID_RE = /^[0-9a-f]{8,32}$/i;
-export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'sonnet', preset:'standard', confirmBeforeSend:true, asrModel:'small', motion:true});
+export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'sonnet', codexModel:'gpt-5.6-terra', preset:'standard', confirmBeforeSend:true, asrModel:'small', motion:true});
+export const CODEX_MODEL_RE = /^[a-z0-9][a-z0-9.\-]{1,40}$/;
 export const validId = id => typeof id === 'string' && ID_RE.test(id);
 export function cleanSettings(input, previous = DEFAULT_SETTINGS) {
   const result = {...previous};
@@ -7,6 +8,11 @@ export function cleanSettings(input, previous = DEFAULT_SETTINGS) {
   for (const [key, values] of Object.entries(choices)) if (Object.hasOwn(input??{},key)) {
     if (!values.includes(input[key])) throw new Error(`설정 값 오류: ${key}`);
     result[key]=input[key];
+  }
+  // Codex 모델 목록은 학생 PC의 Codex마다 달라 고정 목록 대신 형식만 검사한다(실제 허용 여부는 host가 그 PC의 목록으로 다시 확인).
+  if (Object.hasOwn(input??{},'codexModel')) {
+    if (typeof input.codexModel !== 'string' || !CODEX_MODEL_RE.test(input.codexModel)) throw new Error('설정 값 오류: codexModel');
+    result.codexModel=input.codexModel;
   }
   for (const key of ['confirmBeforeSend','motion']) if (Object.hasOwn(input??{},key)) {
     if (typeof input[key] !== 'boolean') throw new Error(`설정 값 오류: ${key}`);

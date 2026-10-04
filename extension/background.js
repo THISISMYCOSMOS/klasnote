@@ -58,7 +58,8 @@ async function reconcile(){
 reconcile().catch(()=>{});
 chrome.runtime.onStartup?.addListener(()=>{reconcile().catch(()=>{});});
 async function chooseProvider(settings){if(settings.provider!=='auto')return settings.provider;const host=await nativeCall({cmd:'detect'});if(host.claude)return 'claude';if(host.codex)return 'codex';throw new Error('Claude Code 또는 Codex CLI를 설치하고 로그인하세요.');}
-const settingsKey=s=>JSON.stringify([s.mode,s.provider,s.claudeModel,s.preset,s.confirmBeforeSend]);
+const settingsKey=s=>JSON.stringify([s.mode,s.provider,s.claudeModel,s.codexModel,s.preset,s.confirmBeforeSend]);
+const modelFor=(provider,s)=>provider==='codex'?s.codexModel:s.claudeModel;
 async function packHash(pack){const data=new TextEncoder().encode(JSON.stringify({prompt:pack.prompt,images:pack.images}));const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',data));return Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');}
 async function download(id){
   const s=await allowed(id);
@@ -90,7 +91,7 @@ async function prepare(id,force=false,{poll=false}={}){
   const local=s.settings.mode==='local',useCache=!!cached.item&&!force;
   const provider=local?'local':useCache?cached.item.provider:await chooseProvider(s.settings);
   const pack=local||useCache?null:await engine('pack',{contentId:id,preset:s.settings.preset,provider});
-  if(pack)checkPayload({cmd:'summarize',provider,model:s.settings.claudeModel,prompt:pack.prompt,images:pack.images});
+  if(pack)checkPayload({cmd:'summarize',provider,model:modelFor(provider,s.settings),prompt:pack.prompt,images:pack.images});
   const requestId=crypto.randomUUID();
   const ticket={requestId,expires:Date.now()+20*60*1000,settingsKey:settingsKey(s.settings),provider,local,cached:useCache,force,hash:pack?await packHash(pack):null};
   const keepComplete=s.statuses[id]?.state==='complete'&&(local||useCache);
@@ -108,7 +109,7 @@ async function summarize(id,requestId){
     if(ticket.local||ticket.cached){const r=await download(id);await patch(id,{state:'complete',step:'HTML 저장 완료',error:null});return r;}
     const pack=await engine('pack',{contentId:id,preset:s.settings.preset,provider:ticket.provider});
     if(await packHash(pack)!==ticket.hash)throw new Error('전송할 내용이 변경되었습니다. 견적을 다시 확인하세요.');
-    const request={cmd:'summarize',provider:ticket.provider,model:s.settings.claudeModel,prompt:pack.prompt,images:pack.images};checkPayload(request);
+    const request={cmd:'summarize',provider:ticket.provider,model:modelFor(ticket.provider,s.settings),prompt:pack.prompt,images:pack.images};checkPayload(request);
     if(deleted.has(id))throw new Error('작업이 중지되었습니다.');
     await patch(id,{state:'summarizing',step:'개인 계정으로 AI 요약 중'});
     const controller=new AbortController();nativeJobs.set(id,controller);
@@ -120,7 +121,7 @@ async function summarize(id,requestId){
     summary.slides=Array.from({length:pack.slideCount},(_,i)=>byS.get(i+1)??{s:i+1,summary:[],comment:''});
     const latest=await state();
     if(deleted.has(id)||!latest.settings.consent||latest.settings.mode!=='ai')throw new Error('작업이 취소되어 결과를 저장하지 않았습니다.');
-    const aiLabel=ticket.provider==='codex'?'Codex · gpt-5.6-terra':`Claude · ${s.settings.claudeModel}`;
+    const aiLabel=ticket.provider==='codex'?`Codex · ${s.settings.codexModel}`:`Claude · ${s.settings.claudeModel}`;
     await engine('saveSummary',{contentId:id,item:{contentId:id,summary,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage,rawText:String(response.text||'').slice(0,400000)}});
     const r=await download(id);await patch(id,{state:'complete',step:'개인 요약 HTML 저장 완료',usage:response.usage,error:null});return r;
   }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'처리 오류',error:String(e.message||e)});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
@@ -155,7 +156,8 @@ const uiHandlers={
   async saveSettings(m){const s=await mutate(s=>{s.settings=cleanSettings(m.settings,s.settings);});return {settings:s.settings};},
   async setConsent(m){if(!['local','ai'].includes(m.mode))throw new Error('처리 모드 오류');const s=await mutate(s=>{s.settings={...s.settings,consent:true,mode:m.mode};});return {settings:s.settings};},
   detect:()=>nativeCall({cmd:'detect'}),
-  async test(){const s=await state();if(!s.settings.consent||s.settings.mode!=='ai')throw new Error('AI 모드 동의 후 연결 테스트가 가능합니다.');return nativeCall({cmd:'test',provider:await chooseProvider(s.settings),model:s.settings.claudeModel});},
+  async test(){const s=await state();if(!s.settings.consent||s.settings.mode!=='ai')throw new Error('AI 모드 동의 후 연결 테스트가 가능합니다.');const provider=await chooseProvider(s.settings);return nativeCall({cmd:'test',provider,model:modelFor(provider,s.settings)});},
+  codexModels:()=>nativeCall({cmd:'codexModels'}),
   async getLibrary(){const [items,summaries]=await Promise.all([store.allLectures(),store.allSummaries()]);return {items,summaries:Object.fromEntries(summaries.map(x=>[x.contentId,{createdAt:x.createdAt,aiLabel:x.aiLabel}]))};},
   async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT','TAB'],documentUrls:[SELF+'offscreen.html',SELF+'processor.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},

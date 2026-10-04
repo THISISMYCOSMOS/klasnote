@@ -45,7 +45,7 @@ function describeDestination(settings, host) {
   // provider가 'auto'였어도 실제로 결정된 값은 ready.provider이므로 그걸 우선 보여준다.
   const actualProvider = ready?.provider || settings?.provider;
   const base = providerLabel[actualProvider] || '알 수 없음';
-  const model = actualProvider !== 'codex' && settings?.claudeModel ? ` · 모델 ${settings.claudeModel}` : '';
+  const model = actualProvider === 'codex' ? (settings?.codexModel ? ` · 모델 ${settings.codexModel}` : '') : settings?.claudeModel ? ` · 모델 ${settings.claudeModel}` : '';
   let account = '본인이 PC에 로컬 로그인한 계정';
   if (host && typeof host === 'object') {
     const parts = Object.entries(host).filter(([, v]) => typeof v === 'string' && v).map(([, v]) => v);

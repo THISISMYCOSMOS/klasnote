@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS = {
   mode: 'local',
   provider: 'auto',
   claudeModel: 'sonnet',
+  codexModel: 'gpt-5.6-terra',
   preset: 'standard',
   confirmBeforeSend: true,
   asrModel: 'small',
@@ -93,9 +94,37 @@ function setConnBanner(ok, errorText) {
   }
 }
 
+// Codex 모델 선택지: 이 PC의 Codex 목록을 AI 연결 프로그램에서 받아 채운다(AI 호출 없음).
+function ensureCodexOption(slug) {
+  if (!slug || [...el('codexModel').options].some((o) => o.value === slug)) return;
+  const o = document.createElement('option'); o.value = slug; o.textContent = slug; el('codexModel').appendChild(o);
+}
+let codexModelsLoaded = false;
+async function loadCodexModels() {
+  if (codexModelsLoaded || !hasRuntime()) return;
+  const res = await callBg('codexModels');
+  if (res.ok === false || !Array.isArray(res.models)) { el('codexModelHint').textContent = 'Codex 모델 목록을 불러오지 못했어요. 기본값(GPT-5.6-Terra)을 사용해요.'; return; }
+  codexModelsLoaded = true;
+  const keep = el('codexModel').value;
+  const sel = el('codexModel'); sel.textContent = '';
+  const def = res.defaultModel || 'gpt-5.6-terra';
+  const list = res.models.some((m) => m.slug === def) ? res.models : [{ slug: def, name: def, description: '' }, ...res.models];
+  for (const m of list) {
+    const o = document.createElement('option');
+    o.value = m.slug;
+    o.textContent = m.slug === def ? `${m.name} (기본)` : m.name;
+    if (m.description) o.title = m.description;
+    sel.appendChild(o);
+  }
+  ensureCodexOption(keep);
+  sel.value = keep || def;
+}
+
 function fillSettingsForm(settings) {
   document.querySelectorAll('input[name="provider"]').forEach((r) => { r.checked = r.value === settings.provider; });
   el('claudeModel').value = settings.claudeModel;
+  ensureCodexOption(settings.codexModel);
+  el('codexModel').value = settings.codexModel || 'gpt-5.6-terra';
   el('preset').value = settings.preset;
   el('asrModel').value = settings.asrModel;
   el('confirmBeforeSend').checked = !!settings.confirmBeforeSend;
@@ -269,15 +298,17 @@ async function refresh() {
 function gatherSettingsFromForm() {
   const provider = document.querySelector('input[name="provider"]:checked')?.value || 'auto';
   const claudeModel = el('claudeModel').value;
+  const codexModel = el('codexModel').value;
   const preset = el('preset').value;
   const asrModel = el('asrModel').value;
   const confirmBeforeSend = el('confirmBeforeSend').checked;
   const motion = el('motionToggle').checked;
   if (!ALLOWED.provider.includes(provider)) throw new Error('invalid provider');
   if (!ALLOWED.claudeModel.includes(claudeModel)) throw new Error('invalid claudeModel');
+  if (!/^[a-z0-9][a-z0-9.\-]{1,40}$/.test(codexModel)) throw new Error('invalid codexModel');
   if (!ALLOWED.preset.includes(preset)) throw new Error('invalid preset');
   if (!ALLOWED.asrModel.includes(asrModel)) throw new Error('invalid asrModel');
-  return { ...latest.settings, provider, claudeModel, preset, asrModel, confirmBeforeSend, motion };
+  return { ...latest.settings, provider, claudeModel, codexModel, preset, asrModel, confirmBeforeSend, motion };
 }
 
 function wireEvents() {
@@ -311,6 +342,7 @@ function wireEvents() {
 
   document.querySelectorAll('input[name="provider"]').forEach((r) => r.addEventListener('change', markFormDirty));
   el('claudeModel').addEventListener('change', markFormDirty);
+  el('codexModel').addEventListener('change', markFormDirty);
   el('preset').addEventListener('change', markFormDirty);
   el('asrModel').addEventListener('change', markFormDirty);
   el('confirmBeforeSend').addEventListener('change', markFormDirty);
@@ -354,7 +386,7 @@ function init() {
   applyConnBanner();
   wireEvents();
   if (hasRuntime()) {
-    refresh();
+    refresh().then(loadCodexModels);
     // 주기적 폴링 없음: 백그라운드의 stateChanged 브로드캐스트와 탭 재표시 시점에만 갱신한다.
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) refresh();
