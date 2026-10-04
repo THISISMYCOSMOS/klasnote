@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>klasnote engine harness</title>
+<pre id="log" style="font:12px monospace;white-space:pre-wrap"></pre>
+<script>
+// 개발용: 뷰어나 출석 API 없이 실제 offscreen 엔진과 콘솔 스택을 검증한다.
+const qs = new URLSearchParams(location.search);
+const originalOpen = indexedDB.open.bind(indexedDB);
+indexedDB.open = (name, version) => originalOpen(name + '-harness-' + (qs.get('run') || 'default'), version);
+const started = performance.now();
+let dump = Promise.resolve();
+const log = (s) => {
+  document.getElementById('log').textContent += `[${((performance.now() - started) / 1000).toFixed(1)}s] ${s}\n`;
+  const body = document.getElementById('log').textContent;
+  const name = 'engine-' + (qs.get('run') || 'default') + '.log';
+  dump = dump.then(() => fetch('/dump?name=' + encodeURIComponent(name), { method: 'POST', body })).catch(() => {});
+};
+for (const level of ['warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    original(...args);
+    log(`${level}: ${args.map((x) => x?.stack || String(x)).join(' ')}`);
+  };
+}
+addEventListener('error', (e) => log(e.error?.stack || e.message));
+addEventListener('unhandledrejection', (e) => log(e.reason?.stack || String(e.reason)));
+let listener;
+const realFetch = window.fetch.bind(window);
+window.fetch = (u, init) => String(u).startsWith('https://kwcommons.kw.ac.kr/')
+  ? realFetch('/proxy?u=' + encodeURIComponent(String(u)), init) : realFetch(u, init);
+const base = new URL('../extension/', location.href).href;
+const OriginalWorker = window.Worker;
+window.Worker = class extends OriginalWorker {
+  constructor(...args) {
+    super(...args);
+    this.addEventListener('message', ({ data }) => {
+      if (data.diagnostic) log('worker: ' + data.diagnostic);
+    });
+    this.addEventListener('error', (e) => log('worker error: ' + e.message));
+  }
+};
+window.chrome = { runtime: {
+  id: 'harness', getURL: (p) => base + p,
+  sendMessage: async (m) => {
+    if (m.target === 'bg' && m.type === 'status') {
+      if (m.patch.step) log(m.patch.step);
+      if (m.patch.error) log(m.patch.error);
+      if (m.patch.state === 'done') log('PASS: full lecture completed');
+    }
+    return { ok: true };
+  },
+  onMessage: { addListener: (fn) => { listener = fn; } },
+} };
+window.__call = (cmd, data = {}) => new Promise((res) =>
+  listener({ target: 'offscreen', cmd, ...data }, { id: 'harness', url: base + 'offscreen.html' }, res));
+</script>
+<script src="../extension/vendor/mp4box.all.js"></script>
+<script type="module">
+await import('../extension/offscreen.js');
+log('GPU adapter: ' + JSON.stringify(await window.__call('ping')));
+const id = qs.get('id');
+if (!/^[0-9a-f]{8,32}$/i.test(id || '')) throw new Error('강의 contentId가 필요합니다.');
+if (qs.get('one') === '1') {
+  // main에는 playerAlive가 없고, 병렬 브랜치에서는 작업자 1개를 강제한다.
+  setInterval(() => window.__call('playerAlive'), 5000);
+  window.__call('playerAlive');
+}
+log('enqueue');
+log(JSON.stringify(await window.__call('enqueue', { contentId: id, meta: {}, asrModel: qs.get('model') || 'small' })));
+</script>

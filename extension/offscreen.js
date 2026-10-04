@@ -2,7 +2,6 @@
 // offscreen 문서에서는 chrome.runtime만 쓸 수 있어 상태는 background로 메시지를 보내 기록한다.
 import { createSource, loadContentInfo, openMp4, fetchWindow, decodeAudio16k, decodeKeyframes } from './src/core/media.js';
 import { createSlideDetector, toJpeg } from './src/core/slides.js';
-
 import { buildPack, groupBySlide } from './src/core/pack.js';
 import { buildReport } from './src/core/report.js';
 import * as store from './src/core/store.js';
@@ -27,27 +26,59 @@ function createWorker() {
   let seq = 0;
   const pend = new Map();
   w.onmessage = ({ data }) => {
+    if (data?.diagnostic) { console.warn('asr worker diagnostic', data.diagnostic); return; }
     const p = pend.get(data?.id);
     if (!p) return;
     if (data.ok === undefined && data.progress !== undefined) { p.onProgress?.(data.progress); return; }
     pend.delete(data.id);
-    if (data.ok) p.res(data); else p.rej(new Error(data.error || '받아쓰기 작업자 오류'));
+    if (data.ok) p.res(data);
+    else {
+      const error = new Error(data.error || '받아쓰기 작업자 오류');
+      if (data.stack) error.stack = data.stack;
+      p.rej(error);
+    }
   };
-  w.onerror = (e) => { for (const p of pend.values()) p.rej(new Error(e.message || '받아쓰기 작업자 오류')); pend.clear(); };
-  const call = (msg, transfer = [], onProgress) => new Promise((res, rej) => { const id = ++seq; pend.set(id, { res, rej, onProgress }); w.postMessage({ ...msg, id }, transfer); });
-  return { call, busy: 0, device: null, terminate: () => { w.terminate(); for (const p of pend.values()) p.rej(new Error('작업자 종료')); pend.clear(); } };
+  const item = { busy: 0, device: null, dead: false };
+  item.terminate = (error = new Error('작업자 종료')) => {
+    if (item.dead) return;
+    item.dead = true;
+    w.terminate();
+    for (const p of pend.values()) p.rej(error);
+    pend.clear();
+  };
+  w.onerror = (e) => item.terminate(new Error(e.message || '받아쓰기 작업자 오류'));
+  w.onmessageerror = () => item.terminate(new Error('받아쓰기 작업자 응답을 읽을 수 없습니다.'));
+  item.call = (msg, transfer = [], onProgress) => new Promise((res, rej) => {
+    if (item.dead) { rej(new Error('작업자 종료')); return; }
+    const id = ++seq;
+    pend.set(id, { res, rej, onProgress });
+    try { w.postMessage({ ...msg, id }, transfer); }
+    catch (e) { pend.delete(id); rej(e); }
+  });
+  return item;
 }
 function terminateWorkers() { for (const w of workers) w.terminate(); workers = []; workersModel = null; }
+// 재생 중에는 새 병렬 작업을 보내지 않는다. 이미 실행 중인 작업자는 끝난 직후 정리한다.
+function trimWorkers(n) {
+  for (let i = workers.length - 1; i >= n; i--) {
+    if (!workers[i].busy) { workers[i].terminate(); workers.splice(i, 1); }
+  }
+}
 // 필요한 수만큼 모델을 불러 둔다. 첫 작업자가 모델 파일을 받아 캐시한 뒤 둘째를 띄워 중복 다운로드를 피한다.
 async function ensureWorkers(n, asrModel, onProgress) {
   if (workersModel !== asrModel) terminateWorkers();
   workersModel = asrModel;
+  workers = workers.filter((w) => !w.dead);
+  n = gpuOk ? Math.min(MAX_WORKERS, Math.max(1, n)) : 1;
+  trimWorkers(n);
   while (workers.length < n) {
     const w = createWorker();
-    const r = await w.call({ cmd: 'load', asrModel }, [], onProgress);
+    workers.push(w); // 로드 중에도 취소가 작업자를 찾아 종료할 수 있게 먼저 등록한다.
+    let r;
+    try { r = await w.call({ cmd: 'load', asrModel }, [], onProgress); }
+    catch (e) { w.terminate(); workers = workers.filter((item) => item !== w); throw e; }
     w.device = r.device;
     if (r.device !== 'webgpu') gpuOk = false; // CPU(WASM)면 병렬 이득이 작아 1개만 쓴다
-    workers.push(w);
     if (!gpuOk) break;
   }
   return workers;
@@ -61,6 +92,8 @@ const status = (contentId, patch) => chrome.runtime.sendMessage({ target: 'bg', 
 
 async function run(job) {
   const { contentId, asrModel } = job;
+  const checkCancel = () => { if (cancelled.has(contentId)) { cancelled.delete(contentId); throw Object.assign(new Error('사용자가 중지함'), { paused: true }); } };
+  checkCancel();
   let lec = await store.get('lectures', contentId);
   if (!lec) {
     const info = await loadContentInfo(src, contentId);
@@ -84,17 +117,24 @@ async function run(job) {
   status(contentId, { state: 'running', progress: resumeAt / lec.duration, title: lec.title, step: '준비 중' });
 
   const mp4 = await openMp4(src, lec.mediaUrl);
+  checkCancel();
   const end = mp4.duration;
   status(contentId, { step: '받아쓰기 모델 불러오는 중' });
   let lastPct = -1, lastPctAt = 0; // 저장소 쓰기 폭주 방지(독립 검토 F5)
-  const onModelProgress = (pct) => { const now = Date.now(); if (pct !== lastPct && now - lastPctAt >= 1000) { lastPct = pct; lastPctAt = now; status(contentId, { step: `모델 받는 중 ${pct}%` }); } };
+  const onModelProgress = (pct) => {
+    const now = Date.now();
+    if (pct !== lastPct && (pct === 100 || now - lastPctAt >= 1000)) {
+      lastPct = pct; lastPctAt = now; status(contentId, { step: `모델 받는 중 ${pct}%` });
+    }
+  };
   await ensureWorkers(1, asrModel, onModelProgress);
+  checkCancel();
   const det = createSlideDetector();
   let slideCount = prevSlides.length;
   const skippedVideo = [];
   const mmss = (x) => `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(Math.floor(x % 60)).padStart(2, '0')}`;
   const inflight = [];
-  const checkCancel = () => { if (cancelled.has(contentId)) { cancelled.delete(contentId); throw Object.assign(new Error('사용자가 중지함'), { paused: true }); } };
+  let completed = false;
   // 받아쓰기가 끝난 가장 오래된 구간부터 저장한다(중간에 끊겨도 이어서 처리 가능하게 시간 순서 유지).
   const commit = async (job) => {
     try {
@@ -127,13 +167,22 @@ async function run(job) {
     const finished = det.push(frames);
     if (t1 >= end) finished.push(...det.finish(end));
     const n = parallelNow();
+    let queued = false;
+    try {
+    checkCancel();
     await ensureWorkers(n, asrModel);
+    checkCancel();
     const worker = pickWorker(n);
     const copy = pcm.slice(); // 작업자로 넘기면 원본 버퍼가 비워지므로 복사본을 보낸다
     worker.busy++;
-    const p = worker.call({ cmd: 'transcribe', pcm: copy.buffer, offset: t }, [copy.buffer]).finally(() => { worker.busy--; });
+    const p = worker.call({ cmd: 'transcribe', pcm: copy.buffer, offset: t }, [copy.buffer]).finally(() => {
+      worker.busy--;
+      trimWorkers(parallelNow());
+    });
     p.catch(() => {}); // 저장 단계(commit)에서 처리한다
     inflight.push({ t, t1, finished, p });
+    queued = true;
+    } finally { if (!queued) for (const slide of finished) slide.bitmap.close(); }
     // 동시에 돌릴 수 있는 개수를 넘으면 가장 오래된 구간이 끝나길 기다려 저장한다.
     while (inflight.length >= parallelNow()) await commit(inflight.shift());
   }
@@ -141,7 +190,13 @@ async function run(job) {
   lec.state = 'done';
   await store.put('lectures', lec);
   status(contentId, { state: 'done', progress: 1, step: skippedVideo.length ? `완료 · 일부 구간 슬라이드 없음(${skippedVideo.slice(0, 3).join(', ')}${skippedVideo.length > 3 ? ' 외' : ''})` : '완료' });
-  } finally { for (const job of inflight) for (const slide of job.finished) slide.bitmap.close(); det.dispose(); }
+  completed = true;
+  } finally {
+    if (!completed) terminateWorkers();
+    await Promise.allSettled(inflight.map((job) => job.p));
+    for (const job of inflight) for (const slide of job.finished) slide.bitmap.close();
+    det.dispose();
+  }
 }
 
 async function retryOnce(fn, what, waits = [1500]) {
@@ -175,8 +230,10 @@ async function pump() {
   try {
     await run(running);
   } catch (e) {
-    const paused = !!e.paused;
-    if (!paused) terminateWorkers(); // GPU 손실·메모리 부족 뒤 같은 모델 재사용 방지(독립 검토 F7)
+    const paused = !!e.paused || cancelled.has(running.contentId);
+    cancelled.delete(running.contentId);
+    if (!paused) console.error('offscreen transcription failed', e);
+    terminateWorkers(); // 일시정지·실패 뒤 메모리와 진행 중 작업을 남기지 않는다.
     const lec = await store.get('lectures', running.contentId);
     if (lec) await store.put('lectures', { ...lec, state: paused ? 'paused' : 'error', error: paused ? null : String(e.message || e) });
     status(running.contentId, paused ? { state: 'paused', step: '일시정지' } : { state: 'error', step: '오류 · 다시 시도할 수 있어요', error: friendlyError(e) });
@@ -198,7 +255,7 @@ async function loadGroups(contentId) {
 const handlers = {
   // navigator.gpu가 있어도 이 문서에서 어댑터를 못 받으면 받아쓰기가 CPU(WASM)로 떨어져 3배 이상 느려진다(실측 추정).
   async ping() { const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null; return { gpu: !!adapter }; },
-  async playerAlive() { playerUntil = Date.now() + 40_000; return {}; },
+  async playerAlive() { playerUntil = Date.now() + 40_000; trimWorkers(1); return {}; },
   async jobs() { return { running: running?.contentId ?? null, queued: queue.map((j) => j.contentId) }; },
   async lecture({ contentId }) { return { item: await store.get('lectures', contentId) }; },
   async getSummary({ contentId }) { return { item: await store.get('summaries', contentId) }; },
@@ -215,7 +272,11 @@ const handlers = {
   async cancel({ contentId }) {
     const i = queue.findIndex((j) => j.contentId === contentId);
     if (i >= 0) { queue.splice(i, 1); status(contentId, { state: 'paused', step: '일시정지' }); return { found: true }; }
-    if (running?.contentId === contentId) { cancelled.add(contentId); return { found: true }; }
+    if (running?.contentId === contentId) {
+      cancelled.add(contentId);
+      terminateWorkers(); // 다음 2분 구간까지 기다리지 않고 모델 메모리를 반납한다.
+      return { found: true };
+    }
     return { found: false };
   },
   async pack({ contentId, preset, provider }) {

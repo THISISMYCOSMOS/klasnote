@@ -16,25 +16,37 @@ export const MODELS = {
 };
 
 let cached = null;
-let releasing = Promise.resolve();
+let pending = Promise.resolve();
 
-export async function releaseAsr() {
-  const previous = cached;
-  cached = null;
-  if (previous) releasing = releasing.then(() => previous.asr.dispose());
-  await releasing;
+// 모델 로드·전사·해제를 같은 순서로 실행한다. idle 해제도 진행 중인 전사의 마지막 조각까지 기다린다.
+function exclusive(fn) {
+  const result = pending.then(fn);
+  pending = result.catch(() => {}); // 해제 실패가 이후 모든 로드를 계속 실패시키지 않게 한다.
+  return result;
 }
 
-export async function loadAsr(modelKey = 'small', onProgress, decoderDtype = 'q4') {
-  const id = MODELS[modelKey] ?? modelKey;
-  if (cached?.id === id) return cached;
-  await releaseAsr();
-  const hasGpu = !!(navigator.gpu && (await navigator.gpu.requestAdapter().catch(() => null)));
-  const device = hasGpu ? 'webgpu' : 'wasm';
-  const dtype = hasGpu ? { encoder_model: 'fp16', decoder_model_merged: decoderDtype } : 'q8';
-  const asr = await pipeline('automatic-speech-recognition', id, { device, dtype, progress_callback: onProgress });
-  cached = { id, device, asr };
-  return cached;
+async function releaseCurrent() {
+  const previous = cached;
+  cached = null;
+  if (previous) await previous.asr.dispose();
+}
+
+export function releaseAsr() {
+  return exclusive(releaseCurrent);
+}
+
+export function loadAsr(modelKey = 'small', onProgress, decoderDtype = 'q4') {
+  return exclusive(async () => {
+    const id = MODELS[modelKey] ?? modelKey;
+    if (cached?.id === id && cached.decoderDtype === decoderDtype) return cached;
+    await releaseCurrent();
+    const hasGpu = !!(navigator.gpu && (await navigator.gpu.requestAdapter().catch(() => null)));
+    const device = hasGpu ? 'webgpu' : 'wasm';
+    const dtype = hasGpu ? { encoder_model: 'fp16', decoder_model_merged: decoderDtype } : 'q8';
+    const asr = await pipeline('automatic-speech-recognition', id, { device, dtype, progress_callback: onProgress });
+    cached = { id, device, asr, decoderDtype };
+    return cached;
+  });
 }
 
 const SR = 16000;
@@ -60,16 +72,20 @@ export function splitAtQuiet(pcm, { min = 22, max = 29, win = 0.2 } = {}) {
 }
 
 // pcm: 16kHz 모노. offset: 이 구간이 강의 전체에서 시작하는 초. 반환 [{start, end, text}]
-export async function transcribe({ asr }, pcm, offset = 0) {
-  const out = [];
-  for (const [a, b] of splitAtQuiet(pcm)) {
-    const r = await asr(pcm.subarray(a, b), { language: 'korean', task: 'transcribe', return_timestamps: true });
-    const base = offset + a / SR;
-    for (const c of r.chunks ?? [{ timestamp: [0, (b - a) / SR], text: r.text }]) {
-      const text = c.text.trim();
-      if (!text) continue;
-      out.push({ start: base + (c.timestamp[0] ?? 0), end: base + (c.timestamp[1] ?? (b - a) / SR), text });
+export function transcribe(model, pcm, offset = 0) {
+  return exclusive(async () => {
+    if (!model || model !== cached) throw new Error('해제되었거나 교체된 받아쓰기 모델입니다.');
+    const { asr } = model;
+    const out = [];
+    for (const [a, b] of splitAtQuiet(pcm)) {
+      const r = await asr(pcm.subarray(a, b), { language: 'korean', task: 'transcribe', return_timestamps: true });
+      const base = offset + a / SR;
+      for (const c of r.chunks ?? [{ timestamp: [0, (b - a) / SR], text: r.text }]) {
+        const text = c.text.trim();
+        if (!text) continue;
+        out.push({ start: base + (c.timestamp[0] ?? 0), end: base + (c.timestamp[1] ?? (b - a) / SR), text });
+      }
     }
-  }
-  return out;
+    return out;
+  });
 }
