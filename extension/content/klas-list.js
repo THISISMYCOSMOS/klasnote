@@ -19,10 +19,18 @@
   }
   function decorate(){
     for(const [id,view] of controls)if(!view.status.isConnected)controls.delete(id);
-    const rows=[...document.querySelectorAll('tr')].filter(row=>[...row.querySelectorAll('button')].some(b=>b.textContent.trim()==='보기'));
-    rows.forEach((row,i)=>{
-      const title=row.querySelectorAll('td')[3]?.textContent?.trim()??'';
-      const match=items[i]?.title===title?items[i]:items.find(item=>item.title===title);if(!match)return;
+    // 바깥 레이아웃 표의 줄까지 잡히지 않게, 그 줄 자신의 칸(:scope > td)에 '보기'가 있는 줄만 쓴다.
+    const ownCells=row=>[...row.children].filter(c=>c.tagName==='TD');
+    // KLAS는 화면에 안 보이는 모바일용 표도 함께 그린다. 보이는 줄에만 버튼을 붙인다.
+    const rows=[...document.querySelectorAll('tr')].filter(row=>row.getClientRects().length>0&&ownCells(row).some(td=>[...td.querySelectorAll('button')].some(b=>b.textContent.trim()==='보기')));
+    // 같은 주차의 둘째 줄부터는 주차·단원 칸이 위 줄과 합쳐져(rowspan) 칸 순서가 달라진다.
+    // 칸 위치 대신 '강의 제목과 똑같은 칸'을 찾아 연결하고, 같은 제목이 여러 번 나오면 등장 순서대로 짝짓는다.
+    const byTitle=new Map();for(const item of items){if(!byTitle.has(item.title))byTitle.set(item.title,[]);byTitle.get(item.title).push(item);}
+    const seen=new Map();
+    rows.forEach(row=>{
+      const title=ownCells(row).map(td=>td.textContent.trim()).find(t=>byTitle.has(t));if(!title)return;
+      const n=seen.get(title)??0;seen.set(title,n+1);
+      const match=byTitle.get(title)[n];if(!match)return;
       const old=row.querySelector('[data-klas-summarizer-control]');
       if(old?.dataset.contentId===match.contentId)return;
       if(old){controls.delete(old.dataset.contentId);old.remove();}
