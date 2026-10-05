@@ -291,3 +291,9 @@ test('a failed number recheck never stops or re-queues transcription',async()=>{
   assert.equal((await fixture.store.byLecture('segments',id))[0].numberCheck,undefined);
   assert.equal((await fixture.handlers.jobs()).waiting,null);
 });
+
+test('the lecture records the transcription model reported by the native host',async()=>{
+  const fixture=engine({duration:120,onTranscribe:()=>({segments:[{start:0,end:1,text:'첫 발화'}],model:'whisper-large-v3',provider:'groq'})});
+  await fixture.handlers.enqueue({contentId:id});await fixture.idle();
+  assert.equal((await fixture.store.get('lectures',id)).asrModel,'whisper-large-v3');
+});

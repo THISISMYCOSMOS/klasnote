@@ -45,6 +45,8 @@ async function run(job){
    const result=await abortable(bg('transcribeAudio',{contentId,audioB64:audioBase64(audio.bytes),offset:audio.offset,duration:audio.duration}),signal);
    checkCancel();
    if(!Array.isArray(result.segments))throw new Error('받아쓰기 응답 형식 오류');
+   // HTML에 표시할 모델명은 연결 프로그램이 실제로 쓴 값을 따른다(MODEL은 응답 전 표시용 기본값).
+   if(typeof result.model==='string'&&/^[\w.-]{1,60}$/.test(result.model))lec.asrModel=result.model;
    const {segs,next}=commitWindow(result.segments,{t,aEnd,final});lastGroqAt=Date.now();
    await recheckNumbers({contentId,mp4,audio:w.audio,segs,signal});checkCancel();
    await store.putMany('segments',segs.map(s=>({contentId,...s})));checkCancel();
