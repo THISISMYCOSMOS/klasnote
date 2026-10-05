@@ -116,13 +116,6 @@ export function mountCampusScene(container, opts = {}) {
   root.className = 'campus-scene' + (opts.compact ? ' campus-scene--compact' : '');
   root.innerHTML = SCENE_SVG; // 고정 마크업만 포함(외부/AI 데이터 없음)
 
-  if (opts.badge !== false) {
-    const badge = document.createElement('span');
-    badge.className = 'campus-badge';
-    badge.textContent = '비공식 · 개인용';
-    root.appendChild(badge);
-  }
-
   const toggleBtn = document.createElement('button');
   toggleBtn.type = 'button';
   toggleBtn.className = 'campus-toggle';

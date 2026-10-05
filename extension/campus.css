@@ -57,17 +57,3 @@
   outline-offset: 2px;
 }
 
-/* ---- 비공식 개인용 배지 ---- */
-.campus-badge {
-  position: absolute;
-  left: 8px;
-  top: 8px;
-  z-index: 6;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(89, 21, 33, 0.82);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
