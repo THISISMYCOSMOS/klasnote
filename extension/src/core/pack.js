@@ -58,7 +58,8 @@ export async function buildPack({ lecture, slides, segments, preset = 'standard'
   const groups = groupBySlide(slides, segments);
   const ranked = groups
     .map((g, i) => ({ i, d: g.end - g.start }))
-    .filter((x) => x.d >= MIN_IMAGE_SEC)
+    // 슬라이드가 없는 강의에서 groupBySlide가 만든 한 칸은 이미지(blob)가 없다(독립 검토: 8초 이상이면 요약이 실패했다).
+    .filter((x) => x.d >= MIN_IMAGE_SEC && groups[x.i].blob)
     .sort((a, b) => b.d - a.d)
     .slice(0, P.maxImages);
   const withImage = new Set(ranked.map((x) => x.i));

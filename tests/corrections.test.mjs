@@ -69,3 +69,10 @@ test('the AI sees each utterance verbatim, so a quoted span around fillers is fo
     summary: { overview: '', exam: [], slides: [], corrections: [{ id: 1, from: '노드를 음 연결', to: '노트를 연결' }, { id: 2, from: '노드 노드 그래프', to: '노드 그래프' }] }, meta: {} });
   assert.deepEqual(marks(html).map((m) => m[1]), ['노트를 연결', '노드 그래프']);
 });
+
+test('an audio-only lecture builds an AI pack without trying to encode a missing slide image', async () => {
+  // Independent review: the synthetic slide for lectures without slides has no blob and crashed buildPack at 8 s or longer.
+  const pack = await buildPack({ lecture: { title: '음성만', duration: 600 }, slides: [], segments: [seg(0, '첫 발화'), seg(590, '마지막 발화')] });
+  assert.equal(pack.images.length, 0);
+  assert.match(pack.prompt, /\| 이미지 없음\]\n#1 첫 발화\n#2 마지막 발화/);
+});
