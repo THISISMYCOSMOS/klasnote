@@ -48,14 +48,24 @@ test('summary parser keeps per-utterance corrections and drops the old global pa
   assert.equal(many.corrections.length, 40);
 });
 
-test('AI input numbers utterances the same way the report does, skipping filler-only lines', async () => {
+test('AI input numbers utterances the same way the report does, skipping empty lines', async () => {
   const lecture = { title: '번호', duration: 20 };
   const slides = [{ start: 0, end: 5, blob: null }, { start: 5, end: 12, blob: null }]; // under 8 s: no image encoding
-  const segments = [seg(0, '첫 발화'), seg(2.5, '음'), seg(6, '세 번째 교환')];
+  const segments = [seg(0, '첫 발화'), seg(2.5, ' '), seg(6, '세 번째 교환')];
   const pack = await buildPack({ lecture, slides, segments });
   assert.match(pack.prompt, /\[S1 [^\n]*\]\n#1 첫 발화\n\n\[S2 [^\n]*\]\n#3 세 번째 교환/);
   assert.doesNotMatch(pack.prompt, /#2/);
   const html = await buildReport({ lecture, groups: [{ start: 0, end: 5, segs: segments.slice(0, 2) }, { start: 5, end: 20, segs: segments.slice(2) }],
     summary: { overview: '', exam: [], slides: [], corrections: [{ id: 3, from: '교환', to: '교안', s: 2 }] }, meta: {} });
   assert.deepEqual(marks(html), [['받아쓰기 원래: 교환 · 근거 S2', '교안']]);
+});
+
+test('the AI sees each utterance verbatim, so a quoted span around fillers is found and fully corrected', async () => {
+  // Independent review: compacted input made these corrections disappear or apply to half of a repeated word.
+  const lecture = { title: '원문', duration: 6 }, segments = [seg(0, '어 노드를 음 연결합니다'), seg(3, '이제 이제 노드 노드 그래프')];
+  const pack = await buildPack({ lecture, slides: [{ start: 0, end: 6, blob: null }], segments });
+  assert.match(pack.prompt, /#1 어 노드를 음 연결합니다\n#2 이제 이제 노드 노드 그래프/);
+  const html = await buildReport({ lecture, groups: [{ start: 0, end: 6, segs: segments }],
+    summary: { overview: '', exam: [], slides: [], corrections: [{ id: 1, from: '노드를 음 연결', to: '노트를 연결' }, { id: 2, from: '노드 노드 그래프', to: '노드 그래프' }] }, meta: {} });
+  assert.deepEqual(marks(html).map((m) => m[1]), ['노트를 연결', '노드 그래프']);
 });

@@ -1,5 +1,5 @@
 // AI에 보낼 묶음을 토큰이 적게 들도록 만든다.
-// - 원문 대본은 PC에만 두고 HTML에 그대로 쓴다(토큰 0). AI에는 군말을 덜어낸 대본만 보낸다.
+// - 원문 대본은 PC에 두고 HTML에 그대로 쓴다. AI에는 발화별 원문을 보낸다(교정 위치를 원문에서 찾기 위해).
 // - AI는 원문을 다시 쓰지 않고, 강의 전체 핵심·시험 포인트와 받아쓰기 교정 목록만 돌려준다(출력 토큰 최소화).
 // - 교정은 발화 #번호 단위로 받는다. 번호는 슬라이드 순서대로 이어 센 발화 순번이며 report.js도 같은 방식으로 센다.
 // - 이미지는 화면에 오래 나온 슬라이드부터 상한까지만, 여백을 잘라 축소해서 보낸다.
@@ -80,8 +80,10 @@ export async function buildPack({ lecture, slides, segments, preset = 'standard'
       images.push({ name: `s${i + 1}.jpg`, b64: await blobToB64(jpg) });
       tag = `이미지 ${images.length}번째`;
     }
-    // 군말만 있던 발화는 줄을 빼되 번호는 건너뛰어 report.js의 번호와 맞춘다.
-    const text = g.segs.map((s) => { n++; const t = compact(s.text); return t ? `#${n} ${t}` : ''; }).filter(Boolean).join('\n');
+    // 교정의 from은 report.js가 원문에서 찾으므로 군말을 덜지 않은 원문을 보낸다. compact를 쓰면 군말을 사이에 둔
+    // 표현이 원문에 없어 교정이 버려졌다(독립 검토). Groq 출력에서 compact가 줄이는 양은 1.2%였다(실측).
+    // 빈 발화는 줄을 빼되 번호는 건너뛰어 report.js의 번호와 맞춘다.
+    const text = g.segs.map((s) => { n++; const t = s.text.trim(); return t ? `#${n} ${t}` : ''; }).filter(Boolean).join('\n');
     lines.push(`\n[S${i + 1} ${mmss(g.start)}-${mmss(g.end)} | ${tag}]\n${text || '(발화 없음)'}`);
   }
   const prompt = lines.join('\n');
