@@ -66,7 +66,8 @@
   });
   let scheduled=false;new MutationObserver(()=>{if(scheduled)return;scheduled=true;setTimeout(()=>{scheduled=false;decorate();},300);}).observe(document.documentElement,{childList:true,subtree:true});
   chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&(changes.statuses||changes.opened||changes.settings)&&!document.hidden)refresh();});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden){refresh();decorate();}});
+  // 확장을 다시 불러온 뒤에는 연결이 끊긴 이 스크립트가 아무것도 보내지 않는다(버튼은 새로고침 안내를 보여 준다).
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&chrome.runtime?.id){refresh();decorate();}});
   window.postMessage({source:'klas-summarizer:request-list:v1'},location.origin);
   refresh();
 })();

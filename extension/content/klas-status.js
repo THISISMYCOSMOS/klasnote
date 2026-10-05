@@ -14,6 +14,8 @@
   let disposed=false;
   async function refresh(){
     if(disposed||document.hidden)return;
+    // 확장을 다시 불러오면 이 스크립트의 chrome API가 사라진다. 오류를 내지 않고 새로고침만 안내한다.
+    if(!chrome.runtime?.id){disposed=true;label.textContent='클라스노트 · 페이지 새로고침 필요';return;}
     try{
       const {counts,consent}=await send('getStatus');if(disposed)return;
       const text=!consent?'처음 설정':counts.active?`처리 중 ${counts.active}`:counts.ready?`확인 필요 ${counts.ready}`:counts.error?`오류 ${counts.error} · 눌러서 확인`:'대기';
@@ -60,6 +62,6 @@
   const changed=(changes,area)=>{if(area==='local'&&(changes.statuses||changes.settings))refresh();};
   const visible=()=>{if(!document.hidden)refresh();};
   chrome.storage.onChanged.addListener(changed);document.addEventListener('visibilitychange',visible);
-  window.addEventListener('pagehide',()=>{disposed=true;chrome.storage.onChanged.removeListener(changed);document.removeEventListener('visibilitychange',visible);window.removeEventListener('resize',onResize);},{once:true});
+  window.addEventListener('pagehide',()=>{disposed=true;try{chrome.storage?.onChanged?.removeListener(changed);}catch{}document.removeEventListener('visibilitychange',visible);window.removeEventListener('resize',onResize);},{once:true});
   refresh();
 })();
