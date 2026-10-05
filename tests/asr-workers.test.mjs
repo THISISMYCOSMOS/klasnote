@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+import { WINDOW, TAIL, commitWindow } from '../extension/src/core/window.js';
 
 const id = '0123456789abcdef', nextId = '1123456789abcdef', lastId = '2123456789abcdef';
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -60,7 +61,7 @@ function engine({ duration=360, onTranscribe, onFetch, onDecode, onPut, database
   const context=vm.createContext({
     URL,AbortController,DOMException,Date:ClockDate,Uint8Array,Uint8ClampedArray,Float32Array,OffscreenCanvas:Canvas,
     setTimeout:(fn,ms)=>{const timerKey=++timerId;timers.set(timerKey,{fn,due:now+ms});return timerKey;},clearTimeout:timerKey=>timers.delete(timerKey),
-    store,console,fetch:async()=>{throw new Error('real network is forbidden in engine unit tests');},
+    store,console,WINDOW,TAIL,commitWindow,fetch:async()=>{throw new Error('real network is forbidden in engine unit tests');},
     chrome:{runtime:{id:'test',getURL:path=>'chrome-extension://test/'+path,onMessage:{addListener(){}},sendMessage:async message=>{
       if(message.type==='status'){statuses.push({contentId:message.contentId,...structuredClone(message.patch)});return {ok:true};}
       if(message.type==='cancelAudio'){cancelRequests.push(message.contentId);return {ok:true};}
@@ -113,7 +114,7 @@ test('Groq engine sends one current window at a time, retaining current lecture 
   first.resolve({segments:[{start:0,end:1,text:'first'}]});
   await fixture.idle();
   assert.deepEqual(fixture.requests.map(message=>[message.contentId,message.offset]),
-    [id,nextId,lastId].flatMap(contentId=>[0,120,240].map(offset=>[contentId,offset])));
+    [id,nextId,lastId].flatMap(contentId=>[0,109,218,327].map(offset=>[contentId,offset])));
   assert.equal((await fixture.store.get('lectures',id)).asrProvider,'groq');
   assert.equal((await fixture.store.get('lectures',id)).asrModel,'whisper-large-v3-turbo');
   assert.ok(fixture.bitmaps.every(frame=>frame.closed===1),'all streamed frame bitmaps are released exactly once');
@@ -197,16 +198,16 @@ test('quota resume starts at committed audio checkpoint and restores the pending
   const fixture=engine({onTranscribe:()=>{if(++calls===2)throw failure('GROQ_RATE_LIMIT',fixture.clock.now+5000);}});
   await fixture.handlers.enqueue({contentId:id});
   await until(async()=>{const jobs=await fixture.handlers.jobs();return jobs.waiting==='rate'&&!jobs.running;});
-  assert.equal((await fixture.store.get('lectures',id)).progressSec,120);
-  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,row.pending]),[[0,120,true]]);
+  assert.equal((await fixture.store.get('lectures',id)).progressSec,109);
+  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,row.pending]),[[0,109,true]]);
   assert.equal((await fixture.store.byLecture('segments',id))[0].text,'fixture transcript');
   await fixture.clock.advance(5000);await fixture.idle();
-  assert.deepEqual(fixture.requests.map(message=>message.offset),[0,120,120,240]);
+  assert.deepEqual(fixture.requests.map(message=>message.offset),[0,109,109,218,327]);
   assert.equal(fixture.requests.filter(message=>message.offset===0).length,1,'successful audio is not uploaded again');
-  assert.deepEqual(fixture.deletions.map(item=>item.from),[0,120]);
+  assert.deepEqual(fixture.deletions.map(item=>item.from),[0,109]);
   assert.equal(fixture.seeds.length,1);
-  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,!!row.pending]),[[0,120,false],[120,360,false]]);
-  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,120,240]);
+  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,!!row.pending]),[[0,218,false],[218,360,false]]);
+  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,109,218,327]);
   assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
 });
 
@@ -217,8 +218,8 @@ test('resume respects audio progress even when a completed slide ended earlier',
     ['slides',new Map([[id+'/0',{contentId:id,start:0,end:30,blob:{screen:255}}],[id+'/30',{contentId:id,start:30,end:120,blob:{screen:0},pending:true}]])],
   ]);
   const fixture=engine({database});await fixture.handlers.enqueue({contentId:id});await fixture.idle();
-  assert.deepEqual(fixture.requests.map(message=>message.offset),[120,240]);
-  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,60,120,240]);
+  assert.deepEqual(fixture.requests.map(message=>message.offset),[120,229,338]);
+  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,60,120,229,338]);
   assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,!!row.pending]),[[0,30,false],[30,120,false],[120,360,false]]);
   assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
 });
@@ -228,8 +229,9 @@ test('oversized compressed media windows shrink before remote transcription and 
   await fixture.handlers.enqueue({contentId:id});await fixture.idle();
   assert.deepEqual(fixture.fetches.slice(0,3).map(request=>[request.start,request.end]),[[0,120],[0,60],[0,30]]);
   assert.ok(fixture.requests.every(message=>message.duration<=30));
+  // Windows overlap by design; each one must start inside the previous audio so no speech is skipped.
   let covered=0;
-  for(const request of fixture.requests){assert.equal(request.offset,covered);covered+=request.duration;}
+  for(const request of fixture.requests){assert.ok(request.offset<=covered&&request.offset+request.duration>covered);covered=request.offset+request.duration;}
   assert.equal(covered,120);assert.equal((await fixture.store.get('lectures',id)).state,'done');
   assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
 });

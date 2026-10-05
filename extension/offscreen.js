@@ -1,11 +1,12 @@
 // Groq 받아쓰기와 로컬 슬라이드 캡처. 음성 인식 모델·PCM·GPU 추론을 만들지 않는다.
 import {createSource,loadContentInfo,openMp4,fetchWindow,decodeKeyframes} from './src/core/media.js';
 import {remuxAudioM4a,audioBase64} from './src/core/aac.js';
+import {WINDOW,TAIL,commitWindow} from './src/core/window.js';
 import {createSlideDetector,toJpeg} from './src/core/slides.js';
 import {buildPack,groupBySlide} from './src/core/pack.js';
 import {buildReport} from './src/core/report.js';
 import * as store from './src/core/store.js';
-const WINDOW=120,MAX_WINDOW_BYTES=32*1024*1024,MODEL='whisper-large-v3-turbo';
+const MAX_WINDOW_BYTES=32*1024*1024,MODEL='whisper-large-v3-turbo';
 const queue=[],cancelled=new Set();
 let running=null,activeAbort=null,waiting=null,retryAt=0,retryTimer=null;
 const pausedError=()=>Object.assign(new Error('사용자가 중지함'),{paused:true});
@@ -34,21 +35,25 @@ async function run(job){
   det=createSlideDetector({seed});let slideCount=prevSlides.filter(s=>!s.pending).length;const skippedVideo=[];
   const saveSlides=async slides=>{for(const slide of slides){try{checkCancel();const blob=await toJpeg(slide.bitmap,{maxWidth:1280});checkCancel();await store.putMany('slides',[{contentId,start:slide.start,end:slide.end,blob}]);slideCount++;}finally{slide.bitmap.close();}}};
   for(let t=resumeAt;t<end;){
-   checkCancel();let t1=Math.min(end,t+WINDOW),w;
-   while(true){try{w=await retryMedia(()=>fetchWindow(src,mp4,t,t1,{slideEvery:2,signal,maxBytes:MAX_WINDOW_BYTES}),signal);break;}catch(e){if(e.code!=='PREFETCH_LIMIT'||t1-t<=5)throw e;t1=t+(t1-t)/2;}}
+   // 확정 범위 WINDOW초에 TAIL초를 더 보낸다. 다음 구간은 저장한 마지막 발화 끝에서 시작한다(window.js).
+   checkCancel();let span=Math.min(end-t,WINDOW+TAIL),w;
+   while(true){try{w=await retryMedia(()=>fetchWindow(src,mp4,t,t+span,{slideEvery:2,signal,maxBytes:MAX_WINDOW_BYTES}),signal);break;}catch(e){if(e.code!=='PREFETCH_LIMIT'||span<=5)throw e;span/=2;}}
+   const final=span===end-t,aEnd=final?end:t+span;
    checkCancel();const audio=remuxAudioM4a(mp4,w.audio);
-   await status(contentId,{step:'Groq 받아쓰기 '+mmss(t)+'~'+mmss(t1)});
+   await status(contentId,{step:'Groq 받아쓰기 '+mmss(t)+'~'+mmss(aEnd)});
    const result=await abortable(bg('transcribeAudio',{contentId,audioB64:audioBase64(audio.bytes),offset:audio.offset,duration:audio.duration}),signal);
-   checkCancel();const segs=result.segments;
-   if(!Array.isArray(segs))throw new Error('받아쓰기 응답 형식 오류');
+   checkCancel();
+   if(!Array.isArray(result.segments))throw new Error('받아쓰기 응답 형식 오류');
+   const {segs,next}=commitWindow(result.segments,{t,aEnd,final});
    await store.putMany('segments',segs.map(s=>({contentId,...s})));checkCancel();
-   try{await decodeKeyframes(mp4,w.keyframes,{signal,onFrame:async frame=>{checkCancel();await saveSlides(det.push([frame]));}});}
-   catch(e){if(signal.aborted||e.paused)throw e;skippedVideo.push(mmss(t)+'~'+mmss(t1));}
-   checkCancel();if(t1>=end)await saveSlides(det.finish(end));
-   const checkpoint=det.checkpoint(t1);
-   if(checkpoint){const blob=await toJpeg(checkpoint.bitmap,{maxWidth:1280});checkCancel();await store.putMany('slides',[{contentId,start:checkpoint.start,end:t1,blob,pending:true}]);}
-   lec.progressSec=t1;await store.put('lectures',lec);checkCancel();
-   await status(contentId,{state:'running',progress:t1/end,step:'Groq 받아쓰기 '+Math.round(t1/end*100)+'%',preview:segs.slice(-2).map(s=>mmss(s.start)+' '+s.text).join('\n').slice(0,400),slides:slideCount});t=t1;
+   // 다음 시작 이후의 키프레임은 다음 구간에서 다시 받아 처리한다(슬라이드 중복 방지).
+   try{await decodeKeyframes(mp4,w.keyframes.filter(k=>final||k.ts<next),{signal,onFrame:async frame=>{checkCancel();await saveSlides(det.push([frame]));}});}
+   catch(e){if(signal.aborted||e.paused)throw e;skippedVideo.push(mmss(t)+'~'+mmss(next));}
+   checkCancel();if(final)await saveSlides(det.finish(end));
+   const checkpoint=det.checkpoint(next);
+   if(checkpoint){const blob=await toJpeg(checkpoint.bitmap,{maxWidth:1280});checkCancel();await store.putMany('slides',[{contentId,start:checkpoint.start,end:next,blob,pending:true}]);}
+   lec.progressSec=next;await store.put('lectures',lec);checkCancel();
+   await status(contentId,{state:'running',progress:next/end,step:'Groq 받아쓰기 '+Math.round(next/end*100)+'%',preview:segs.slice(-2).map(s=>mmss(s.start)+' '+s.text).join('\n').slice(0,400),slides:slideCount});t=next;
   }
   checkCancel();lec.state='done';await store.put('lectures',lec);checkCancel();
   await status(contentId,{state:'done',progress:1,step:skippedVideo.length?'완료 · 일부 구간 슬라이드 없음('+skippedVideo.slice(0,3).join(', ')+')':'완료'});
