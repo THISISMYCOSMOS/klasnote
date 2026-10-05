@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "KLAS 강의 요약",
+  "name": "klasnote",
   "version": "0.1.4",
   "minimum_chrome_version": "116",
   "description": "Groq로 강의를 받아쓰고, 본인 Claude/Codex 계정으로 선택한 강의의 요약 노트를 만듭니다.",
@@ -21,7 +21,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "KLAS 강의 요약 패널 열기"
+    "default_title": "klasnote 패널 열기"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

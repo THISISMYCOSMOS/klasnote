@@ -127,7 +127,7 @@ ${lecture.period ? `<div><dt>학습기간</dt><dd>${esc(lecture.period)}</dd></d
 <div><dt>정리</dt><dd>받아쓰기 ${esc(meta.asrModel)} · 요약 ${esc(meta.aiLabel)} · ${esc(meta.createdAt)}</dd></div>
 </dl>
 ${summary ? `<section class="lecture-summary"><h2>강의 전체 핵심</h2><div class="box"><p class="overview">${esc(summary.overview)}</p></div>${exam ? `<h2>시험 포인트</h2><div class="box"><ul>${exam}</ul></div>` : ''}</section>` : '<div class="box"><p>AI 요약 없이 원문만 정리한 파일입니다.</p></div>'}
-${noteUrl ? `<a class="note-action" href="${esc(noteUrl)}" target="_blank" rel="noopener noreferrer">요약노트 만들기</a><p class="note-help">KLAS 강의 요약 확장이 설치된 Chrome에서 열면, 저장된 받아쓰기로 요약을 준비합니다. 확인 후에만 AI로 전송합니다.</p>` : ''}
+${noteUrl ? `<a class="note-action" href="${esc(noteUrl)}" target="_blank" rel="noopener noreferrer">요약노트 만들기</a><p class="note-help">klasnote 확장이 설치된 Chrome에서 열면, 저장된 받아쓰기로 요약을 준비합니다. 확인 후에만 AI로 전송합니다.</p>` : ''}
 <div class="view" role="group" aria-label="보기 방식"><button data-v="both" aria-pressed="true">함께 보기</button><button data-v="sum" aria-pressed="false">요약만</button><button data-v="raw" aria-pressed="false">원문만</button></div>
 ${cards.join('\n')}
 <p class="meta">원문은 음성인식(위 '정리'에 표시된 받아쓰기 모델)으로 받아쓴 것이라 오류가 있을 수 있습니다. <span class="suspect">물결 밑줄</span>은 음성인식이 지어냈을 수 있어 확인이 필요한 부분입니다. <mark>표시</mark>는 AI가 교정한 말이며, 마우스를 올리면 원래 받아쓰기가 보입니다. 개인 학습용이며, 강의 자료의 저작권은 교수자에게 있습니다.</p>
