@@ -70,44 +70,56 @@ test('bounded prefetch joins valid chunks and cancellation abandons a blocked st
   gate.resolve({ done: false, value: new Uint8Array(20) });await tick();
 });
 
-test('video cancellation closes blocked flush and disposes late bitmap and frame outputs', async () => {
-  const flush = deferred(), bitmap = deferred(), controller = new AbortController();let decoder, closed = 0, frameClosed = 0, bitmapClosed = 0;
+// decodeKeyframes draws each frame into one CPU canvas (willReadFrequently) and transfers it out, instead of
+// createImageBitmap(VideoFrame), which grew the GPU process by 400-700 MB per window on 2026-10-05.
+function cpuCanvas({ onBitmap = () => ({ close() {} }), onDraw = () => {}, contexts = [] } = {}) {
+  return class OffscreenCanvas {
+    constructor(w, h) { this.width = w; this.height = h; }
+    getContext(type, options) { contexts.push(options); return { drawImage: (...args) => onDraw(...args) }; }
+    transferToImageBitmap() { return onBitmap(); }
+  };
+}
+
+test('video cancellation closes blocked flush and disposes frame outputs and bitmaps', async () => {
+  const flush = deferred(), controller = new AbortController();let decoder, closed = 0, frameClosed = 0, bitmapClosed = 0;
   class VideoDecoder {
     static async isConfigSupported() { return { supported: true }; }
     constructor(options) { this.options = options;this.state = 'configured';decoder = this; }
     configure() {} decode() { this.options.output({ timestamp: 0, close() { frameClosed++; } }); }
     flush() { return flush.promise; } close() { this.state = 'closed';closed++; }
   }
-  await withGlobals({ VideoDecoder, EncodedVideoChunk: class {}, createImageBitmap: () => bitmap.promise }, async () => {
+  const contexts = [];
+  await withGlobals({ VideoDecoder, EncodedVideoChunk: class {}, OffscreenCanvas: cpuCanvas({ contexts, onBitmap: () => ({ close() { bitmapClosed++; } }) }) }, async () => {
     const pending = decodeKeyframes(videoMp4, [{ ts: 0, data: new Uint8Array(1) }], { signal: controller.signal });
     const rejected = assert.rejects(pending, { name: 'AbortError' });
     await tick();controller.abort();await rejected;assert.equal(closed, 1);
-    bitmap.resolve({ close() { bitmapClosed++; } });flush.resolve();await tick();
+    flush.resolve();await tick();
     assert.equal(bitmapClosed, 1);assert.equal(frameClosed, 1);
     decoder.options.output({ close() { frameClosed++; } });assert.equal(frameClosed, 2);
+    assert.deepEqual(contexts, [{ willReadFrequently: true }], 'frames are drawn on a CPU canvas, not the GPU');
   });
 });
 
-test('video cancellation also abandons bitmap conversion after decoder flush completes', async () => {
-  const bitmap = deferred(), controller = new AbortController();let frameClosed = 0, bitmapClosed = 0, existingClosed = 0, conversions = 0;
+test('a frame that cannot be drawn rejects and releases every frame and earlier bitmap', async () => {
+  let frameClosed = 0, existingClosed = 0, draws = 0;
   class VideoDecoder {
     static async isConfigSupported() { return { supported: true }; }
     constructor(options) { this.options = options;this.state = 'configured'; }
     configure() {} decode() { this.options.output({ timestamp: 0, close() { frameClosed++; } }); }
     async flush() {} close() { this.state = 'closed'; }
   }
-  await withGlobals({ VideoDecoder, EncodedVideoChunk: class {}, createImageBitmap: () => ++conversions === 1 ? Promise.resolve({ close() { existingClosed++; } }) : bitmap.promise }, async () => {
-    const pending = decodeKeyframes(videoMp4, [0, 1].map(ts => ({ ts, data: new Uint8Array(1) })), { signal: controller.signal });
-    const rejected = assert.rejects(pending, { name: 'AbortError' });
-    await tick();controller.abort();await rejected;assert.equal(existingClosed, 1);
-    bitmap.resolve({ close() { bitmapClosed++; } });await tick();assert.equal(frameClosed, 2);assert.equal(bitmapClosed, 1);
+  const OffscreenCanvas = cpuCanvas({ onDraw: () => { if (++draws === 2) throw new Error('draw failed'); }, onBitmap: () => ({ close() { existingClosed++; } }) });
+  await withGlobals({ VideoDecoder, EncodedVideoChunk: class {}, OffscreenCanvas }, async () => {
+    await assert.rejects(decodeKeyframes(videoMp4, [0, 1].map(ts => ({ ts, data: new Uint8Array(1) }))), /draw failed/);
+    assert.equal(frameClosed, 2);assert.equal(existingClosed, 1);
   });
 });
 
 test('streaming video emits one bitmap at a time and preserves caller ownership',async()=>{
   let open=0,peak=0,framesClosed=0,received=0;
   class VideoDecoder{static async isConfigSupported(){return {supported:true};}constructor(o){this.o=o;this.state='configured';}configure(){}decode(k){this.o.output({timestamp:k.timestamp,close(){framesClosed++;}});}async flush(){}close(){this.state='closed';}}
-  await withGlobals({VideoDecoder,EncodedVideoChunk:class{constructor(o){Object.assign(this,o);}},createImageBitmap:async()=>{open++;peak=Math.max(peak,open);return {close(){open--;}};}},async()=>{
+  const OffscreenCanvas=cpuCanvas({onBitmap:()=>{open++;peak=Math.max(peak,open);return {close(){open--;}};}});
+  await withGlobals({VideoDecoder,EncodedVideoChunk:class{constructor(o){Object.assign(this,o);}},OffscreenCanvas},async()=>{
     const frames=Array.from({length:60},(_,ts)=>({ts,data:new Uint8Array(1)}));
     const out=await decodeKeyframes(videoMp4,frames,{onFrame:async frame=>{received++;await tick();frame.bitmap.close();}});
     assert.equal(received,60);assert.equal(framesClosed,60);assert.equal(peak,1);assert.equal(open,0);assert.deepEqual(out,[]);

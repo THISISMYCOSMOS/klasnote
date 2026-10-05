@@ -208,11 +208,17 @@ export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal,
   const pending = [];
   let discard = false;
   let failure = null;
+  // createImageBitmap(VideoFrame)과 기본 2D 캔버스는 GPU 프로세스에 이미지를 만들고 늦게 해제해, 구간마다 GPU 메모리가
+  // +400~700MB 튀었다(실측 2026-10-05). CPU 캔버스 하나(willReadFrequently)에 그려 꺼내면 close() 즉시 해제된다.
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingQuality = 'high';
+  const toBitmap = (frame) => { try { ctx.drawImage(frame, 0, 0, w, h); return Promise.resolve(canvas.transferToImageBitmap()); } catch (e) { return Promise.reject(e); } };
   const dec = new VideoDecoder({
     output: (frame) => {
       if (discard || signal?.aborted) { frame.close(); return; }
       const ts=frame.timestamp/1e6;
-      pending.push(createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' })
+      pending.push(toBitmap(frame)
         .then(async (bitmap) => {
           if (discard || signal?.aborted) bitmap.close();
           else if (onFrame) { try { await onFrame({ ts, bitmap }); } catch(e) { bitmap.close(); throw e; } }

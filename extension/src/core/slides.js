@@ -2,10 +2,10 @@
 // 작은 흑백 썸네일의 평균 절대 차이로 판단한다. 판서나 커서 이동 같은 작은 변화는 같은 슬라이드로 본다.
 
 const TW = 64, TH = 36;
+let thumbCtx = null; // 프레임마다 캔버스를 새로 만들지 않고 하나를 재사용한다.
 
 function thumb(bitmap) {
-  const c = new OffscreenCanvas(TW, TH);
-  const g = c.getContext('2d', { willReadFrequently: true });
+  const g = thumbCtx ??= new OffscreenCanvas(TW, TH).getContext('2d', { willReadFrequently: true });
   g.drawImage(bitmap, 0, 0, TW, TH);
   const d = g.getImageData(0, 0, TW, TH).data;
   const gray = new Float32Array(TW * TH);
@@ -83,6 +83,7 @@ export async function toJpeg(bitmap, { maxWidth = 1280, quality = 0.85, crop = f
   const box = crop ? contentBox(bitmap) : { x: 0, y: 0, w: bitmap.width, h: bitmap.height };
   const s = Math.min(1, maxWidth / box.w);
   const c = new OffscreenCanvas(Math.round(box.w * s), Math.round(box.h * s));
-  c.getContext('2d').drawImage(bitmap, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
+  // CPU 캔버스로 인코딩해 GPU 프로세스에 큰 캔버스를 남기지 않는다(decodeKeyframes 주석 참고).
+  c.getContext('2d', { willReadFrequently: true }).drawImage(bitmap, box.x, box.y, box.w, box.h, 0, 0, c.width, c.height);
   return c.convertToBlob({ type: 'image/jpeg', quality });
 }
