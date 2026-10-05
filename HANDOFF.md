@@ -39,7 +39,7 @@ HTML에 표시하는 받아쓰기 모델명은 호스트가 응답한 `result.mo
 ## 4. 코드 지도
 | 경로 | 역할 |
 |---|---|
-| `extension/manifest.json` | MV3, v0.1.4. 권한 storage·unlimitedStorage·offscreen·nativeMessaging·downloads·sidePanel, 호스트 권한은 `kwcommons.kw.ac.kr`만(Groq 호출은 호스트가 한다). 콘텐츠 스크립트는 KLAS 목록·상태 표시·KWCommons 플레이어 경로로 제한 |
+| `extension/manifest.json` | MV3, v0.1.5. 권한 storage·unlimitedStorage·offscreen·nativeMessaging·downloads·sidePanel, 호스트 권한은 `kwcommons.kw.ac.kr`만(Groq 호출은 호스트가 한다). 콘텐츠 스크립트는 KLAS 목록·상태 표시·KWCommons 플레이어 경로로 제한 |
 | `extension/background.js` + `src/core/policy.js` | 서비스 워커. 발신자 분류·동의·`opened` 게이트·1회용 티켓+`packHash`·`nativeCall`·요약/다운로드·`reconcile`. 설정 정제, 요약 JSON 파싱(`parseSummary`, 교정 `parseCorrections`) |
 | `extension/offscreen.js` | 받아쓰기 큐·재개·취소·Groq 한도 대기, 슬라이드 저장, pack/report/목록/삭제 핸들러 |
 | `src/core/media.js · aac.js · window.js · numcheck.js · slides.js · suspect.js` | §2 |
