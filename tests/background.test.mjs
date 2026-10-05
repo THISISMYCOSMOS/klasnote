@@ -18,7 +18,7 @@ globalThis.chrome={
     sendMessage:async m=>{
       if(m.target!=='offscreen')return;
       engineCount++;
-      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
+      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return lectureState==='missing'?{ok:false,error:'아직 받아쓰기가 끝나지 않았습니다.'}:{ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
     },
     connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:m.cmd==='summarize'&&nativeFail?{ok:false,error:nativeFail}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
@@ -248,4 +248,14 @@ test('the engine status marks transcription done and clears the mark when transc
  await route({type:'status',contentId:id,patch:{state:'running'}},engineSender);
  data.statuses[id]={...data.statuses[id],state:'error'};
  await assert.rejects(route({type:'download',contentId:id},listSender),/받아쓰기가 끝난/);
+});
+
+test('a completed status without a stored transcript explains the fix and reopens processing',async()=>{
+ // Seen 2026-10-05: lectures marked complete in the list had no transcript in this Chrome's IndexedDB.
+ reset();lectureState='missing';
+ const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:14}};
+ data.statuses[id]={state:'complete',step:'HTML 저장 완료'};
+ try{await assert.rejects(route({type:'download',contentId:id},listSender),/저장된 받아쓰기가 없습니다.*지금 요약/);}
+ finally{lectureState='done';}
+ assert.equal(data.statuses[id].state,'paused');assert.equal(data.statuses[id].transcribed,false);assert.equal(downloads,0);
 });

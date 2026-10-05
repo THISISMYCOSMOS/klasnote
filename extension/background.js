@@ -74,7 +74,14 @@ async function download(id){
   const s=await allowed(id);
   const cached=await engine('getSummary',{contentId:id});
   const item=s.settings.mode==='ai'?cached.item:null;
-  const r=await engine('report',{contentId:id,summary:item?.summary??null,meta:{aiLabel:item?.aiLabel??'AI 요약 없음',createdAt:item?.createdAt??Date.now()}});
+  let r;
+  try{r=await engine('report',{contentId:id,summary:item?.summary??null,meta:{aiLabel:item?.aiLabel??'AI 요약 없음',createdAt:item?.createdAt??Date.now()}});}
+  catch(e){
+    // 상태는 완료인데 이 Chrome 저장소에 받아쓰기가 없으면(다른 프로필에서 처리했거나 지워진 경우) 다시 받아쓰도록 안내한다.
+    if(!/아직 받아쓰기가 끝나지 않았습니다/.test(String(e.message)))throw e;
+    await patch(id,{state:'paused',step:'저장된 받아쓰기가 없어요 · 지금 요약을 누르면 다시 받아써요',transcribed:false,error:null});
+    throw new Error('이 Chrome에 저장된 받아쓰기가 없습니다. "지금 요약"을 누르면 다시 받아씁니다.');
+  }
   const meta=s.metadata[id]??{},course=safeName(meta.course||'과목 미지정'),title=safeName(r.title);
   const prefix=meta.week?`${meta.week}주차_`:'';
   if(typeof r.url!=='string'||!r.url.startsWith('blob:'+SELF.slice(0,-1)+'/'))throw new Error('다운로드 주소 오류');
