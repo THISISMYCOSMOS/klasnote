@@ -2,13 +2,14 @@
 import {createSource,loadContentInfo,openMp4,fetchWindow,decodeKeyframes} from './src/core/media.js';
 import {remuxAudioM4a,audioBase64} from './src/core/aac.js';
 import {WINDOW,TAIL,commitWindow} from './src/core/window.js';
+import {PAD,MAX_PER_WINDOW,MIN_GAP_MS,numbersIn,numberMismatch} from './src/core/numcheck.js';
 import {createSlideDetector,toJpeg} from './src/core/slides.js';
 import {buildPack,groupBySlide} from './src/core/pack.js';
 import {buildReport} from './src/core/report.js';
 import * as store from './src/core/store.js';
 const MAX_WINDOW_BYTES=32*1024*1024,MODEL='whisper-large-v3-turbo';
 const queue=[],cancelled=new Set();
-let running=null,activeAbort=null,waiting=null,retryAt=0,retryTimer=null;
+let running=null,activeAbort=null,waiting=null,retryAt=0,retryTimer=null,lastGroqAt=0;
 const pausedError=()=>Object.assign(new Error('사용자가 중지함'),{paused:true});
 async function bg(type,data={}){const r=await chrome.runtime.sendMessage({target:'bg',type,...data});if(!r?.ok)throw Object.assign(new Error(r?.error||'연결 프로그램이 응답하지 않습니다.'),{code:r?.code,retryAt:r?.retryAt});return r;}
 const status=(contentId,patch)=>chrome.runtime.sendMessage({target:'bg',type:'status',contentId,patch}).catch(()=>{});
@@ -44,7 +45,8 @@ async function run(job){
    const result=await abortable(bg('transcribeAudio',{contentId,audioB64:audioBase64(audio.bytes),offset:audio.offset,duration:audio.duration}),signal);
    checkCancel();
    if(!Array.isArray(result.segments))throw new Error('받아쓰기 응답 형식 오류');
-   const {segs,next}=commitWindow(result.segments,{t,aEnd,final});
+   const {segs,next}=commitWindow(result.segments,{t,aEnd,final});lastGroqAt=Date.now();
+   await recheckNumbers({contentId,mp4,audio:w.audio,segs,signal});checkCancel();
    await store.putMany('segments',segs.map(s=>({contentId,...s})));checkCancel();
    // 다음 시작 이후의 키프레임은 다음 구간에서 다시 받아 처리한다(슬라이드 중복 방지).
    try{await decodeKeyframes(mp4,w.keyframes.filter(k=>final||k.ts<next),{signal,onFrame:async frame=>{checkCancel();await saveSlides(det.push([frame]));}});}
@@ -58,6 +60,24 @@ async function run(job){
   checkCancel();lec.state='done';await store.put('lectures',lec);checkCancel();
   await status(contentId,{state:'done',progress:1,step:skippedVideo.length?'완료 · 일부 구간 슬라이드 없음('+skippedVideo.slice(0,3).join(', ')+')':'완료'});
  }finally{controller.abort();det?.dispose();if(activeAbort===controller)activeAbort=null;}
+}
+// 숫자가 든 발화만 앞뒤 PAD초를 붙여 다시 받아쓴다(numcheck.js). 분당 요청 한도를 넘지 않게 간격을 두고,
+// 실패해도 받아쓰기는 계속하며 그 발화의 확인만 생략한다(중지는 그대로 전달).
+async function recheckNumbers({contentId,mp4,audio,segs,signal}){
+ let count=0;
+ for(const s of segs){
+  if(count>=MAX_PER_WINDOW||!numbersIn(s.text).length)continue;
+  const samples=audio.filter(a=>a.ts+a.dur>s.start-PAD&&a.ts<s.end+PAD);
+  if(!samples.length)continue;count++;
+  try{
+   await abortable(new Promise(r=>setTimeout(r,Math.max(0,lastGroqAt+MIN_GAP_MS-Date.now()))),signal);
+   const clip=remuxAudioM4a(mp4,samples);
+   const r=await abortable(bg('transcribeAudio',{contentId,audioB64:audioBase64(clip.bytes),offset:clip.offset,duration:clip.duration}),signal);
+   const mismatch=Array.isArray(r.segments)?numberMismatch(s,r.segments):null;
+   if(mismatch)s.numberCheck=mismatch.alt.slice(0,200);
+  }catch(e){if(signal.aborted||e.paused)throw e;}
+  finally{lastGroqAt=Date.now();}
+ }
 }
 async function retryMedia(fn,signal){for(let attempt=0;;attempt++){if(signal.aborted)throw pausedError();try{return await fn();}catch(e){if(signal.aborted||e.paused)throw pausedError();if(attempt||e.code==='PREFETCH_LIMIT')throw e;await abortable(new Promise(r=>setTimeout(r,1500)),signal);}}}
 function scheduleQuota(){clearTimeout(retryTimer);retryTimer=setTimeout(()=>{if(Date.now()<retryAt){scheduleQuota();return;}waiting=null;retryAt=0;pump();},Math.min(2147483647,Math.max(1,retryAt-Date.now())));}

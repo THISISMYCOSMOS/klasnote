@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { WINDOW, TAIL, commitWindow } from '../extension/src/core/window.js';
+import { PAD, MAX_PER_WINDOW, MIN_GAP_MS, numbersIn, numberMismatch } from '../extension/src/core/numcheck.js';
 
 const id = '0123456789abcdef', nextId = '1123456789abcdef', lastId = '2123456789abcdef';
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -61,7 +62,7 @@ function engine({ duration=360, onTranscribe, onFetch, onDecode, onPut, database
   const context=vm.createContext({
     URL,AbortController,DOMException,Date:ClockDate,Uint8Array,Uint8ClampedArray,Float32Array,OffscreenCanvas:Canvas,
     setTimeout:(fn,ms)=>{const timerKey=++timerId;timers.set(timerKey,{fn,due:now+ms});return timerKey;},clearTimeout:timerKey=>timers.delete(timerKey),
-    store,console,WINDOW,TAIL,commitWindow,fetch:async()=>{throw new Error('real network is forbidden in engine unit tests');},
+    store,console,WINDOW,TAIL,commitWindow,PAD,MAX_PER_WINDOW,MIN_GAP_MS,numbersIn,numberMismatch,fetch:async()=>{throw new Error('real network is forbidden in engine unit tests');},
     chrome:{runtime:{id:'test',getURL:path=>'chrome-extension://test/'+path,onMessage:{addListener(){}},sendMessage:async message=>{
       if(message.type==='status'){statuses.push({contentId:message.contentId,...structuredClone(message.patch)});return {ok:true};}
       if(message.type==='cancelAudio'){cancelRequests.push(message.contentId);return {ok:true};}
@@ -256,4 +257,37 @@ test('removing a queued lecture preserves current request and cannot bypass the 
   await fixture.handlers.cancel({contentId:nextId});
   const jobs=await fixture.handlers.jobs();assert.equal(jobs.waiting,null);assert.equal(jobs.retryAt,null);
   await fixture.clock.advance(10_000);assert.equal(fixture.requests.length,1);
+});
+
+test('number utterances are re-transcribed once with padding, paced under the request limit, and a mismatch is stored',async()=>{
+  const fixture=engine({onTranscribe:(message,number)=>{
+    if(number===1)return {segments:[{start:10,end:13,text:'출석의 20%'},{start:20,end:22,text:'숫자 없는 발화'}]};
+    if(number===2)return {segments:[{start:9,end:14,text:'출석의 10%'}]};
+  }});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(()=>fixture.requests.length===1);
+  await tick();await tick();
+  assert.equal(fixture.requests.length,1,'the recheck waits for the request gap');
+  await fixture.clock.advance(3100);
+  await until(()=>fixture.requests.length>=2);
+  await fixture.idle();
+  assert.equal(fixture.requests.length,5,'4 windows plus one recheck for the only number utterance');
+  const segments=await fixture.store.byLecture('segments',id);
+  assert.equal(segments.find(row=>row.start===10).numberCheck,'출석의 10%');
+  assert.equal(segments.find(row=>row.start===20).numberCheck,undefined);
+  assert.equal((await fixture.store.get('lectures',id)).state,'done');
+});
+
+test('a failed number recheck never stops or re-queues transcription',async()=>{
+  const fixture=engine({duration:120,onTranscribe:(message,number)=>{
+    if(number===1)return {segments:[{start:10,end:13,text:'출석의 20%'}]};
+    throw failure('GROQ_RATE_LIMIT',fixture.clock.now+60_000);
+  }});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(()=>fixture.requests.length===1);
+  await fixture.clock.advance(3100);await fixture.idle();
+  assert.equal(fixture.requests.length,2);
+  assert.equal((await fixture.store.get('lectures',id)).state,'done');
+  assert.equal((await fixture.store.byLecture('segments',id))[0].numberCheck,undefined);
+  assert.equal((await fixture.handlers.jobs()).waiting,null);
 });
