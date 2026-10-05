@@ -103,7 +103,7 @@ const SCENE_SVG = `
  * 캠퍼스 장면을 container에 그리고 제어 핸들을 돌려준다.
  * @param {HTMLElement} container
  * @param {{state?:'idle'|'study'|'walk'|'success', motion?:boolean, compact?:boolean,
- *          badge?:boolean, onToggleMotion?:(on:boolean)=>void}} opts
+ *          onToggleMotion?:(on:boolean)=>void}} opts
  */
 export function mountCampusScene(container, opts = {}) {
   let state = opts.state ?? 'idle';
