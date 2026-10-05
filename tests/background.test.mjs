@@ -208,3 +208,15 @@ test('cancellation during storage permission check never starts a late remote re
  await route({type:'cancelAudio',contentId:id},engineSender);release();await rejected;
  assert.equal(nativeCount,0);chrome.storage.local.get=original;
 });
+test('the KLAS list can save a raw HTML once transcription is done, without an AI summary',async()=>{
+ reset();
+ const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:11}};
+ data.statuses[id]={state:'running'};
+ await assert.rejects(route({type:'download',contentId:id},listSender),/받아쓰기가 끝난/);
+ for(const state of ['done','awaiting_confirmation','complete']){
+  data.statuses[id]={state};const before=downloads;
+  await route({type:'download',contentId:id},listSender);
+  assert.equal(downloads,before+1,state);assert.equal(data.statuses[id].state,state,'saving raw HTML keeps the summary flow open');
+ }
+ assert.equal(nativeCount,0,'no AI call');
+});

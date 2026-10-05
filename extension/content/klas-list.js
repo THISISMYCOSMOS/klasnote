@@ -10,7 +10,9 @@
       const ready=['done','awaiting_confirmation'].includes(status.state);
       view.button.textContent=ready?'확인하고 저장':'지금 요약';
       view.button.disabled=!opened;view.button.title=!opened?'강의를 한 번 열어 본 뒤 요약할 수 있습니다.':ready?'처리가 끝났어요. 확인 화면에서 저장합니다.':'로컬 처리 후 확장 화면에서 전송량을 확인합니다.';
-      view.download.hidden=status.state!=='complete';
+      // 요약 전이어도 받아쓰기가 끝났으면 원문 HTML을 받을 수 있다.
+      view.download.hidden=!['done','awaiting_confirmation','complete'].includes(status.state);
+      view.download.title=status.state==='complete'?'저장된 결과로 HTML을 다시 받습니다 (AI 재호출 없음).':'AI 요약 없이 받아쓰기 원문으로 HTML을 받습니다.';
       const step=status.error||status.step||(opened?'개인 복습용':'한 번 열어야 요약 가능');
       if(view.status.textContent!==String(step).slice(0,200))view.status.textContent=String(step).slice(0,200);
       const pct=Math.round((Number(status.progress)||0)*100);

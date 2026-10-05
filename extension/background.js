@@ -61,6 +61,8 @@ const settingsKey=s=>JSON.stringify([s.mode,s.provider,s.claudeModel,s.codexMode
 const modelFor=(provider,s)=>provider==='codex'?s.codexModel:s.claudeModel;
 async function pauseAudioQueue(){const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('pauseQueue');for(const c of asrJobs.values())c.abort();}
 async function packHash(pack){const data=new TextEncoder().encode(JSON.stringify({prompt:pack.prompt,images:pack.images}));const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',data));return Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');}
+// 받아쓰기가 끝나 HTML을 만들 수 있는 상태. AI 요약 여부와 관계없다.
+const DOWNLOADABLE=new Set(['done','awaiting_confirmation','complete']);
 async function download(id){
   const s=await allowed(id);
   const cached=await engine('getSummary',{contentId:id});
@@ -241,8 +243,8 @@ export async function route(m,sender){
     }
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
     if(m.type==='startProcessing')return startProcessing(id);
-    // 목록의 'HTML 받기': 이미 완료된 강의만, 저장된 결과로 다시 만든다(AI 재호출 없음).
-    if(m.type==='download'){const s=await state();if(s.statuses[id]?.state!=='complete')throw new Error('처리가 끝난 강의만 받을 수 있습니다.');return download(id);}
+    // 목록의 'HTML 받기': 받아쓰기가 끝난 강의를 저장된 결과로 만든다(AI 호출 없음). 요약 전이면 원문만 담긴다.
+    if(m.type==='download'){const s=await state();if(!DOWNLOADABLE.has(s.statuses[id]?.state))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return download(id);}
     throw new Error('목록에서 허용되지 않은 요청');
   }
   if(role==='player'){

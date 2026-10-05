@@ -160,6 +160,26 @@ function buildItem(contentId, status, metadata, opened) {
     });
     row.appendChild(btn);
   }
+  // 요약 전(받아쓰기 완료) 강의도 AI 호출 없이 원문 HTML을 받을 수 있다.
+  if (opened && ['done', 'awaiting_confirmation'].includes(state)) {
+    const raw = document.createElement('button');
+    raw.type = 'button';
+    raw.className = 'sp-mini-btn';
+    raw.textContent = 'HTML 받기';
+    raw.title = 'AI 요약 없이 받아쓰기 원문으로 HTML을 받습니다.';
+    raw.disabled = pending.has(contentId);
+    raw.addEventListener('click', async (e) => {
+      if (!e.isTrusted || pending.has(contentId)) return;
+      clearError();
+      pending.add(contentId);
+      raw.disabled = true;
+      const res = await callBg('download', { contentId });
+      pending.delete(contentId);
+      if (res && res.ok === false) showError(res.error || 'HTML을 저장하지 못했어요.');
+      await refresh();
+    });
+    row.appendChild(raw);
+  }
 
   li.appendChild(row);
 
