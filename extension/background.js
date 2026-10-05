@@ -61,8 +61,15 @@ const settingsKey=s=>JSON.stringify([s.mode,s.provider,s.claudeModel,s.codexMode
 const modelFor=(provider,s)=>provider==='codex'?s.codexModel:s.claudeModel;
 async function pauseAudioQueue(){const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('pauseQueue');for(const c of asrJobs.values())c.abort();}
 async function packHash(pack){const data=new TextEncoder().encode(JSON.stringify({prompt:pack.prompt,images:pack.images}));const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',data));return Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');}
-// 받아쓰기가 끝나 HTML을 만들 수 있는 상태. AI 요약 여부와 관계없다.
+// 받아쓰기가 끝나 HTML을 만들 수 있는 상태. AI 요약 여부와 관계없다. 요약이 실패한 '오류'도 transcribed면 받을 수 있다.
 const DOWNLOADABLE=new Set(['done','awaiting_confirmation','complete']);
+const canDownload=st=>DOWNLOADABLE.has(st?.state)||st?.transcribed===true;
+// CLI가 돌려준 영어 오류 중 사용자가 직접 해결할 수 있는 것은 한국어 안내로 바꾼다(원문은 뒤에 남긴다).
+export function friendlyError(message){
+  const text=String(message||'');
+  if(/claude/i.test(text)&&/does not support this model|newer is required|claude update/i.test(text))return 'Claude Code가 오래되어 선택한 모델을 쓸 수 없습니다. 터미널에서 claude update를 실행한 뒤 다시 시도하세요. (원문: '+text.slice(0,160)+')';
+  return text;
+}
 async function download(id){
   const s=await allowed(id);
   const cached=await engine('getSummary',{contentId:id});
@@ -130,7 +137,7 @@ async function summarize(id,requestId){
     const aiLabel=ticket.provider==='codex'?`Codex · ${s.settings.codexModel}`:`Claude · ${s.settings.claudeModel}`;
     await engine('saveSummary',{contentId:id,item:{contentId:id,summary,summaryFormat:SUMMARY_FORMAT,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage,rawText:String(response.text||'').slice(0,400000)}});
     const r=await download(id);await patch(id,{state:'complete',step:'개인 요약 HTML 저장 완료',usage:response.usage,error:null});return r;
-  }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'처리 오류',error:String(e.message||e)});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
+  }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'요약 오류 · 받아쓰기 원문 HTML은 받을 수 있어요',error:friendlyError(e.message||e),transcribed:true});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
 }
 async function afterTranscription(id){
   const s=await state(),intent=s.statuses[id]?.intent;
@@ -213,6 +220,8 @@ export async function route(m,sender){
     if(p.state&&!['queued','running','done','paused','error'].includes(p.state))throw new Error('상태 오류');
     if(p.progress!==undefined)p.progress=Math.max(0,Math.min(1,Number(p.progress)||0));
     if(p.title)p.title=String(p.title).slice(0,200);if(p.step)p.step=String(p.step).slice(0,500);
+    // 받아쓰기 완료 여부를 남겨, 이후 요약이 실패해도 원문 HTML을 받을 수 있게 한다.
+    if(p.state==='done')p.transcribed=true;else if(p.state==='running')p.transcribed=false;
     await patch(id,p);if(p.state==='done')afterTranscription(id).catch(e=>patch(id,{state:'error',error:String(e.message||e),intent:null}));return {};
   }
   if(role==='ui'){
@@ -244,7 +253,7 @@ export async function route(m,sender){
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
     if(m.type==='startProcessing')return startProcessing(id);
     // 목록의 'HTML 받기': 받아쓰기가 끝난 강의를 저장된 결과로 만든다(AI 호출 없음). 요약 전이면 원문만 담긴다.
-    if(m.type==='download'){const s=await state();if(!DOWNLOADABLE.has(s.statuses[id]?.state))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return download(id);}
+    if(m.type==='download'){const s=await state();if(!canDownload(s.statuses[id]))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return download(id);}
     throw new Error('목록에서 허용되지 않은 요청');
   }
   if(role==='player'){

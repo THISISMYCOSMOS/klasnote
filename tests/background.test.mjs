@@ -5,6 +5,7 @@ import {DEFAULT_SETTINGS,classifySender,safeName,parseSummary,cleanSettings,chec
 
 const id='0123456789abcdef',ext='klihhclhnhhmldcbnkpampimkjafmbdm',self=`chrome-extension://${ext}/`;
 const ui={id:ext,url:self+'confirm.html?id='+id,tab:{id:1}};
+let nativeFail=null;
 let data,nativeCount,downloads,cache,pack,engineCount,nativeDelay=5,downloadFailures=0,panelOpens=[],lectureState='done',enqueueCount=0;
 const clone=v=>structuredClone(v);
 const summary={overview:'개요',slides:[{s:1,summary:['핵심'],comment:'설명'}],exam:['점검'],corrections:[]};
@@ -19,14 +20,14 @@ globalThis.chrome={
       engineCount++;
       switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
     },
-    connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
+    connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:m.cmd==='summarize'&&nativeFail?{ok:false,error:nativeFail}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
   downloads:{download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;return downloads;}},
   offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},tabs:{create:async()=>({id:2})}
 };
 let panelPaths=[];
 chrome.sidePanel={setPanelBehavior:async()=>{},open:async options=>{panelOpens.push(options);},setOptions:async options=>{panelPaths.push(options.path);}};
-const {route}=await import('../extension/background.js');
+const {route,friendlyError}=await import('../extension/background.js');
 const send=(type,extra={})=>route({type,...extra},ui);
 
 test('strict sender routes reject external and lookalike pages',()=>{
@@ -219,4 +220,32 @@ test('the KLAS list can save a raw HTML once transcription is done, without an A
   assert.equal(downloads,before+1,state);assert.equal(data.statuses[id].state,state,'saving raw HTML keeps the summary flow open');
  }
  assert.equal(nativeCount,0,'no AI call');
+});
+
+test('an outdated Claude Code error is explained in Korean and the raw HTML stays downloadable',async()=>{
+ // Exact CLI message seen on 2026-10-05 with Claude Code 2.1.258 and claude-opus-5-5.
+ const cli='claude 오류: API Error: 400 Claude Code 2.1.258 does not support this model; version 2.1.280 or newer is required. Run "claude update", or update the Claude desktop app, then try again.';
+ assert.match(friendlyError(cli),/^Claude Code가 오래되어 .*claude update를 실행한 뒤 다시 시도하세요\. \(원문: claude 오류/);
+ assert.equal(friendlyError('다른 오류'),'다른 오류');
+ reset();lectureState='done';nativeFail=cli;
+ try{
+  const ready=await send('prepareNote',{contentId:id});
+  await assert.rejects(send('summarize',{contentId:id,requestId:ready.requestId}));
+ }finally{nativeFail=null;}
+ assert.equal(data.statuses[id].state,'error');assert.equal(data.statuses[id].transcribed,true);
+ assert.match(data.statuses[id].error,/claude update/);
+ const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:12}};
+ const before=downloads;await route({type:'download',contentId:id},listSender);assert.equal(downloads,before+1);
+});
+test('the engine status marks transcription done and clears the mark when transcription runs again',async()=>{
+ reset();const engineSender={id:ext,url:self+'offscreen.html'};
+ await route({type:'status',contentId:id,patch:{state:'running',progress:0.5}},engineSender);assert.equal(data.statuses[id].transcribed,false);
+ await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));
+ assert.equal(data.statuses[id].transcribed,true);
+ data.statuses[id]={...data.statuses[id],state:'error'};
+ const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:13}};
+ await route({type:'download',contentId:id},listSender);
+ await route({type:'status',contentId:id,patch:{state:'running'}},engineSender);
+ data.statuses[id]={...data.statuses[id],state:'error'};
+ await assert.rejects(route({type:'download',contentId:id},listSender),/받아쓰기가 끝난/);
 });

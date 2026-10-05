@@ -161,7 +161,7 @@ function buildItem(contentId, status, metadata, opened) {
     row.appendChild(btn);
   }
   // 요약 전(받아쓰기 완료) 강의도 AI 호출 없이 원문 HTML을 받을 수 있다.
-  if (opened && ['done', 'awaiting_confirmation'].includes(state)) {
+  if (opened && (['done', 'awaiting_confirmation'].includes(state) || (state === 'error' && status?.transcribed === true))) {
     const raw = document.createElement('button');
     raw.type = 'button';
     raw.className = 'sp-mini-btn';
