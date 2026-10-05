@@ -21,6 +21,13 @@ function correctionsBySegment(corrections, slideCount) {
   return map;
 }
 
+// 정리 시각은 저장소에 밀리초 숫자로 들어 있다. 사람이 읽는 날짜(이 PC 시간대 기준 YYYY-MM-DD)로 바꿔 보여 준다.
+function displayDate(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+  const d = new Date(value);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const suspectSpan = (html, reason) => reason ? `<span class="suspect" title="${esc(`확인 필요: ${reason}`)}">${html}</span>` : html;
 
 function renderSegment(text, list = []) {
@@ -124,7 +131,7 @@ body[data-view=sum] .card{display:none}body[data-view=raw] .lecture-summary{disp
 ${lecture.module ? `<div><dt>단원</dt><dd>${esc(lecture.module)}</dd></div>` : ''}
 ${lecture.period ? `<div><dt>학습기간</dt><dd>${esc(lecture.period)}</dd></div>` : ''}
 <div><dt>강의 길이</dt><dd>${mmss(lecture.duration)} · 슬라이드 ${groups.length}장</dd></div>
-<div><dt>정리</dt><dd>받아쓰기 ${esc(meta.asrModel)} · 요약 ${esc(meta.aiLabel)} · ${esc(meta.createdAt)}</dd></div>
+<div><dt>정리</dt><dd>받아쓰기 ${esc(meta.asrModel)} · 요약 ${esc(meta.aiLabel)} · ${esc(displayDate(meta.createdAt))}</dd></div>
 </dl>
 ${summary ? `<section class="lecture-summary"><h2>강의 전체 핵심</h2><div class="box"><p class="overview">${esc(summary.overview)}</p></div>${exam ? `<h2>시험 포인트</h2><div class="box"><ul>${exam}</ul></div>` : ''}</section>` : '<div class="box"><p>AI 요약 없이 원문만 정리한 파일입니다.</p></div>'}
 ${noteUrl ? `<a class="note-action" href="${esc(noteUrl)}" target="_blank" rel="noopener noreferrer">요약노트 만들기</a><p class="note-help">klasnote 확장이 설치된 Chrome에서 열면, 저장된 받아쓰기로 요약을 준비합니다. 확인 후에만 AI로 전송합니다.</p>` : ''}

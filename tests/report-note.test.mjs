@@ -52,3 +52,10 @@ test('note confirmation in local mode opens settings only on trusted click; fram
   local.node('confirmBtn').onclick({isTrusted:true});assert.equal(local.calls[1].type,'openConsent');
   assert.equal((await run(true)).calls.length,0);
 });
+
+test('report shows the summary time as a date, not a raw millisecond timestamp',async()=>{
+  const at=new Date(2026,9,4,15,30).getTime();
+  const html=await buildReport({lecture:{title:'강의',duration:60},groups:[],summary:null,meta:{aiLabel:'AI 요약 없음',createdAt:at}});
+  assert.match(html,/AI 요약 없음 · 2026-10-04<\/dd>/);
+  assert.doesNotMatch(html,new RegExp(String(at)));
+});
