@@ -259,3 +259,10 @@ test('a completed status without a stored transcript explains the fix and reopen
  finally{lectureState='done';}
  assert.equal(data.statuses[id].state,'paused');assert.equal(data.statuses[id].transcribed,false);assert.equal(downloads,0);
 });
+
+test('a rejected summary ticket does not mark the lecture as transcribed',async()=>{
+ // Independent review: an expired or stale confirm click must not offer a raw HTML download by itself.
+ reset();data.statuses[id]={state:'running',transcribed:false};
+ await assert.rejects(send('summarize',{contentId:id,requestId:'stale'}),/만료/);
+ assert.equal(data.statuses[id].state,'error');assert.equal(data.statuses[id].transcribed,false);
+});

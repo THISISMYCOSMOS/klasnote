@@ -123,11 +123,12 @@ async function prepare(id,force=false,{poll=false,note=false}={}){
 async function summarize(id,requestId){
   if(active.has(id))throw new Error('이 강의는 이미 처리 중입니다.');
   active.add(id);
+  let ticketOk=false;
   try{
     const s=await allowed(id),ticket=s.statuses[id]?.ticket;
     if(!ticket||ticket.requestId!==requestId||ticket.expires<Date.now()||ticket.settingsKey!==settingsKey(s.settings))throw new Error('확인 정보가 만료되었거나 설정이 변경되었습니다. 다시 견적을 확인하세요.');
     // Consume before any paid call, so duplicate clicks/replays cannot charge twice.
-    await patch(id,{ticket:null,intent:null});
+    await patch(id,{ticket:null,intent:null});ticketOk=true;
     if(ticket.local||ticket.cached){const r=await download(id);await patch(id,{state:'complete',step:'HTML 저장 완료',error:null});return r;}
     const pack=await engine('pack',{contentId:id,preset:s.settings.preset,provider:ticket.provider});
     if(await packHash(pack)!==ticket.hash)throw new Error('전송할 내용이 변경되었습니다. 견적을 다시 확인하세요.');
@@ -144,7 +145,7 @@ async function summarize(id,requestId){
     const aiLabel=ticket.provider==='codex'?`Codex · ${s.settings.codexModel}`:`Claude · ${s.settings.claudeModel}`;
     await engine('saveSummary',{contentId:id,item:{contentId:id,summary,summaryFormat:SUMMARY_FORMAT,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage,rawText:String(response.text||'').slice(0,400000)}});
     const r=await download(id);await patch(id,{state:'complete',step:'개인 요약 HTML 저장 완료',usage:response.usage,error:null});return r;
-  }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'요약 오류 · 받아쓰기 원문 HTML은 받을 수 있어요',error:friendlyError(e.message||e),transcribed:true});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
+  }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'요약 오류 · 받아쓰기 원문 HTML은 받을 수 있어요',error:friendlyError(e.message||e),...(ticketOk?{transcribed:true}:{})});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
 }
 async function afterTranscription(id){
   const s=await state(),intent=s.statuses[id]?.intent;
