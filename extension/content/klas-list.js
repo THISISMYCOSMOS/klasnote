@@ -48,7 +48,7 @@
       const button=document.createElement('button');button.type='button';button.className='ks-summary-button';button.textContent='지금 요약';
       const download=document.createElement('button');download.type='button';download.className='ks-summary-button ks-summary-download';download.textContent='HTML 받기';download.title='저장된 결과로 HTML을 다시 받습니다 (AI 재호출 없음).';download.hidden=true;
       const status=document.createElement('span');status.className='ks-summary-status';status.setAttribute('role','status');
-      const progress=document.createElement('progress');progress.max=1;progress.value=0;progress.setAttribute('aria-label','로컬 받아쓰기 진행률');
+      const progress=document.createElement('progress');progress.max=1;progress.value=0;progress.setAttribute('aria-label','받아쓰기 진행률');
       const badge=document.createElement('span');badge.className='ks-badge';badge.hidden=true;badge.setAttribute('role','status');
       group.append(label,button,download);root.append(badge,group,status,progress);[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='보기')?.parentElement.append(cell);
       controls.set(match.contentId,{toggle,button,download,status,progress,badge,title:match.title});

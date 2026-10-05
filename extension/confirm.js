@@ -74,7 +74,7 @@ function renderReady(res, settings, host) {
   const notice = el('transNotice');
   if (res.local) {
     notice.className = 'notice notice--local';
-    notice.textContent = '이 요약은 AI로 전송하지 않고 로컬 받아쓰기만으로 만들어집니다.';
+    notice.textContent = '이 요약은 AI로 전송하지 않고 받아쓰기 원문만으로 만들어집니다.';
     setConfirmAction('로컬로 만들기', doSummarize);
   } else if (res.cached) {
     notice.className = 'notice notice--muted';
@@ -98,7 +98,7 @@ async function pollPrepare(settings, host, forceOverride = force) {
   if (res.pending) {
     if (polling && ['paused', 'error'].includes(res.state)) { fail(res.state === 'paused' ? '처리가 중지됐어요. 강의 목록에서 "다시 시도"를 누르면 이어서 처리해요.' : '처리 중 오류가 났어요. 패널에서 이유를 확인하고 다시 시도하세요.'); return; }
     polling = true;
-    el('loadingMsg').textContent = '로컬 받아쓰기를 준비하는 중입니다… (잠시 후 자동으로 다시 확인)';
+    el('loadingMsg').textContent = '받아쓰기를 준비하는 중입니다… (잠시 후 자동으로 다시 확인)';
     pendingPrepareTimer = setTimeout(() => { pendingPrepareTimer = null; pollPrepare(settings, host, forceOverride); }, 3000);
     return;
   }
