@@ -10,7 +10,7 @@
   button.append(grip,dot,label);root.append(style,button);
   const header=document.querySelector('header, #header');
   if(header)header.append(host);else{host.dataset.floating='';document.body.append(host);}
-  const send=async type=>{const r=await chrome.runtime.sendMessage({target:'bg',type});if(!r?.ok)throw Error(r?.error||'확장 연결 오류');return r;};
+  const send=async type=>{let r;try{r=await chrome.runtime.sendMessage({target:'bg',type});}catch(e){throw Error(/context invalidated/i.test(String(e?.message))?'확장이 새로 설치되거나 새로고침되었어요. 이 페이지를 새로고침(F5)한 뒤 다시 눌러 주세요.':String(e?.message||e));}if(!r?.ok)throw Error(r?.error||'확장 연결 오류');return r;};
   let disposed=false;
   async function refresh(){
     if(disposed||document.hidden)return;

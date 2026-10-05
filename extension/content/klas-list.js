@@ -1,7 +1,8 @@
 (() => {
   const valid=/^[0-9a-f]{8,32}$/i,controls=new Map();
   let items=[],current={statuses:{},opened:{}},lastSignature='';
-  const send=async(type,data={})=>{const r=await chrome.runtime.sendMessage({target:'bg',type,...data});if(!r?.ok)throw new Error(r?.error||'확장 연결 오류');return r;};
+  // 확장을 다시 불러오면 이 페이지에 남은 스크립트의 연결이 끊긴다(Extension context invalidated). 새로고침을 안내한다.
+  const send=async(type,data={})=>{let r;try{r=await chrome.runtime.sendMessage({target:'bg',type,...data});}catch(e){throw new Error(/context invalidated/i.test(String(e?.message))?'확장이 새로 설치되거나 새로고침되었어요. 이 페이지를 새로고침(F5)한 뒤 다시 눌러 주세요.':String(e?.message||e));}if(!r?.ok)throw new Error(r?.error||'확장 연결 오류');return r;};
   async function refresh(){try{current=await send('getState');render();}catch{}}
   function render(){
     for(const [id,view] of controls){
