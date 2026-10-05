@@ -3,9 +3,8 @@ import { mountCampusScene } from './campus.js';
 
 const ALLOWED = {
   provider: ['auto', 'claude', 'codex'],
-  claudeModel: ['haiku', 'sonnet', 'opus'],
+  claudeModel: ['haiku', 'sonnet', 'opus', 'claude-opus-5-5'],
   preset: ['save', 'standard', 'detail'],
-  asrModel: ['small', 'base'],
 };
 
 const STATUS_LABEL = {
@@ -23,11 +22,11 @@ const DEFAULT_SETTINGS = {
   consent: false,
   mode: 'local',
   provider: 'auto',
-  claudeModel: 'sonnet',
-  codexModel: 'gpt-5.6-terra',
+  claudeModel: 'claude-opus-5-5',
+  codexModel: 'gpt-6-sol',
   preset: 'standard',
   confirmBeforeSend: true,
-  asrModel: 'base',
+  asrConsent: false,
   motion: true,
 };
 
@@ -103,11 +102,11 @@ let codexModelsLoaded = false;
 async function loadCodexModels() {
   if (codexModelsLoaded || !hasRuntime()) return;
   const res = await callBg('codexModels');
-  if (res.ok === false || !Array.isArray(res.models)) { el('codexModelHint').textContent = 'Codex 모델 목록을 불러오지 못했어요. 기본값(GPT-5.6-Terra)을 사용해요.'; return; }
+  if (res.ok === false || !Array.isArray(res.models)) { el('codexModelHint').textContent = 'Codex 모델 목록을 불러오지 못했어요. 기본값(GPT-6-Sol)을 사용해요.'; return; }
   codexModelsLoaded = true;
   const keep = el('codexModel').value;
   const sel = el('codexModel'); sel.textContent = '';
-  const def = res.defaultModel || 'gpt-5.6-terra';
+  const def = res.defaultModel || 'gpt-6-sol';
   const list = res.models.some((m) => m.slug === def) ? res.models : [{ slug: def, name: def, description: '' }, ...res.models];
   for (const m of list) {
     const o = document.createElement('option');
@@ -124,9 +123,9 @@ function fillSettingsForm(settings) {
   document.querySelectorAll('input[name="provider"]').forEach((r) => { r.checked = r.value === settings.provider; });
   el('claudeModel').value = settings.claudeModel;
   ensureCodexOption(settings.codexModel);
-  el('codexModel').value = settings.codexModel || 'gpt-5.6-terra';
+  el('codexModel').value = settings.codexModel || 'gpt-6-sol';
   el('preset').value = settings.preset;
-  el('asrModel').value = settings.asrModel;
+  el('asrConsent').checked = !!settings.asrConsent;
   el('confirmBeforeSend').checked = !!settings.confirmBeforeSend;
   el('motionToggle').checked = settings.motion !== false;
 }
@@ -136,7 +135,7 @@ function renderConsent(settings) {
   if (settings.mode === 'ai' && settings.consent) {
     p.textContent = '현재: AI 모드 (대본 일부 + 선택 슬라이드가 본인 Claude/Codex 계정으로 전송됨)';
   } else {
-    p.textContent = '현재: 로컬 전용 모드 (AI로 아무것도 전송하지 않음)';
+    p.textContent = '현재: 원문만 모드 (Groq로 음성 전송 · 요약 AI 호출 없음)';
   }
 }
 
@@ -187,6 +186,7 @@ function buildLectureItem(item) {
       meta.appendChild(stepP);
     }
   }
+  if(status?.state==='queued'&&status.step){const p=document.createElement('div');p.className='lecture-item__sub';p.textContent=status.step;meta.appendChild(p);}
   if (status?.state === 'error' && status.error) {
     const errP = document.createElement('div');
     errP.className = 'lecture-item__sub';
@@ -300,18 +300,29 @@ function gatherSettingsFromForm() {
   const claudeModel = el('claudeModel').value;
   const codexModel = el('codexModel').value;
   const preset = el('preset').value;
-  const asrModel = el('asrModel').value;
+  const asrConsent = el('asrConsent').checked;
   const confirmBeforeSend = el('confirmBeforeSend').checked;
   const motion = el('motionToggle').checked;
   if (!ALLOWED.provider.includes(provider)) throw new Error('invalid provider');
   if (!ALLOWED.claudeModel.includes(claudeModel)) throw new Error('invalid claudeModel');
   if (!/^[a-z0-9][a-z0-9.\-]{1,40}$/.test(codexModel)) throw new Error('invalid codexModel');
   if (!ALLOWED.preset.includes(preset)) throw new Error('invalid preset');
-  if (!ALLOWED.asrModel.includes(asrModel)) throw new Error('invalid asrModel');
-  return { ...latest.settings, provider, claudeModel, codexModel, preset, asrModel, confirmBeforeSend, motion };
+  return { ...latest.settings, provider, claudeModel, codexModel, preset, asrConsent, confirmBeforeSend, motion };
 }
 
+async function groqStatus(){const r=await callBg('groqStatus');el('groqState').textContent=r.ok===false?'연결 프로그램 확인 필요: '+r.error:r.configured?'Groq 키 저장됨 · 연결 테스트를 눌러 확인하세요.':'Groq API 키가 없습니다.';}
 function wireEvents() {
+  el('saveGroqKey').addEventListener('click',async e=>{
+    if(!e.isTrusted)return;
+    const key=el('groqApiKey').value.trim();el('groqApiKey').value='';
+    let r=key?await callBg('saveGroqKey',{apiKey:key}):await callBg('groqStatus');
+    if(r.ok===false||!r.configured){el('groqState').textContent=r.error||'API 키를 입력하세요.';return;}
+    r=await callBg('saveSettings',{settings:{asrConsent:el('asrConsent').checked}});
+    if(r.ok===false){el('groqState').textContent=r.error;return;}
+    latest.settings={...latest.settings,...r.settings};el('groqState').textContent='키·음성 전송 동의를 저장했습니다. 연결 테스트로 확인하세요.';
+  });
+  el('testGroq').addEventListener('click',async e=>{if(!e.isTrusted)return;el('groqState').textContent='Groq 연결 확인 중…';const r=await callBg('testGroq');el('groqState').textContent=r.ok===false?'연결 실패: '+r.error:'Groq 연결 성공 · '+r.model+' 사용 가능. 음성 인식 품질은 실제 강의 처리 후 확인할 수 있습니다.';});
+  el('removeGroqKey').addEventListener('click',async e=>{if(!e.isTrusted)return;el('groqApiKey').value='';const r=await callBg('removeGroqKey');el('groqState').textContent=r.ok===false?r.error:r.configured?'파일의 키는 삭제됐지만 환경 변수 키가 남아 있습니다.':'Groq 키를 삭제했습니다.';});
   el('detectBtn').addEventListener('click', async (e) => {
     if (!e.isTrusted) return;
     el('detectResult').textContent = '감지 중…';
@@ -344,7 +355,7 @@ function wireEvents() {
   el('claudeModel').addEventListener('change', markFormDirty);
   el('codexModel').addEventListener('change', markFormDirty);
   el('preset').addEventListener('change', markFormDirty);
-  el('asrModel').addEventListener('change', markFormDirty);
+  el('asrConsent').addEventListener('change', markFormDirty);
   el('confirmBeforeSend').addEventListener('change', markFormDirty);
   el('motionToggle').addEventListener('change', () => {
     markFormDirty();
@@ -386,7 +397,7 @@ function init() {
   applyConnBanner();
   wireEvents();
   if (hasRuntime()) {
-    refresh().then(loadCodexModels);
+    refresh().then(()=>Promise.all([loadCodexModels(),groqStatus()]));
     // 주기적 폴링 없음: 백그라운드의 stateChanged 브로드캐스트와 탭 재표시 시점에만 갱신한다.
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) refresh();

@@ -7,5 +7,6 @@ extension/vendor/
 .env
 .env.*
 .codex/
+groq-config.json
 /샘플*.html
 dist/

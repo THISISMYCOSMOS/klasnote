@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSource, fetchWindow, decodeAudio16k, decodeKeyframes } from '../extension/src/core/media.js';
+import { createSource, fetchWindow, decodeKeyframes } from '../extension/src/core/media.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
@@ -70,40 +70,6 @@ test('bounded prefetch joins valid chunks and cancellation abandons a blocked st
   gate.resolve({ done: false, value: new Uint8Array(20) });await tick();
 });
 
-test('audio cancellation closes a blocked decoder and discards late AudioData', async () => {
-  const gate = deferred(), controller = new AbortController();let decoder, closed = 0, copied = 0, dataClosed = 0;
-  class AudioDecoder {
-    constructor(options) { this.options = options;this.state = 'configured';decoder = this; }
-    configure() {} decode() {} flush() { return gate.promise; } close() { this.state = 'closed';closed++; }
-  }
-  await withGlobals({ AudioDecoder, EncodedAudioChunk: class {} }, async () => {
-    const pending = decodeAudio16k(audioMp4, audioSamples, { signal: controller.signal });
-    const rejected = assert.rejects(pending, { name: 'AbortError' });
-    controller.abort();await rejected;assert.equal(closed, 1);
-    decoder.options.output({ copyTo() { copied++; }, close() { dataClosed++; } });
-    gate.resolve();await tick();assert.equal(copied, 0);assert.equal(dataClosed, 1);
-  });
-});
-
-test('audio cancellation does not wait for offline rendering or expose its late result', async () => {
-  const gate = deferred(), controller = new AbortController();let started = false, used = 0;
-  class AudioDecoder {
-    constructor(options) { this.options = options;this.state = 'configured'; }
-    configure() {} decode() { this.options.output({ numberOfFrames: 2, numberOfChannels: 1, copyTo(buffer) { buffer.fill(0.5); }, close() {} }); }
-    async flush() {} close() { this.state = 'closed'; }
-  }
-  class OfflineAudioContext {
-    createBuffer() { return { copyToChannel() {} }; } createBufferSource() { return { connect() {}, start() {} }; }
-    startRendering() { started = true;return gate.promise; }
-  }
-  await withGlobals({ AudioDecoder, OfflineAudioContext, EncodedAudioChunk: class {} }, async () => {
-    const pending = decodeAudio16k(audioMp4, audioSamples, { signal: controller.signal });
-    const rejected = assert.rejects(pending, { name: 'AbortError' });
-    await tick();assert.equal(started, true);controller.abort();await rejected;
-    gate.resolve({ getChannelData() { used++;return new Float32Array(1); } });await tick();assert.equal(used, 0);
-  });
-});
-
 test('video cancellation closes blocked flush and disposes late bitmap and frame outputs', async () => {
   const flush = deferred(), bitmap = deferred(), controller = new AbortController();let decoder, closed = 0, frameClosed = 0, bitmapClosed = 0;
   class VideoDecoder {
@@ -138,27 +104,12 @@ test('video cancellation also abandons bitmap conversion after decoder flush com
   });
 });
 
-test('ordinary audio and video decoding still return their output with ownership transferred to the caller', async () => {
-  const samples = new Float32Array([0.25, 0.5]);let audioClosed = 0, frameClosed = 0, bitmapClosed = 0;
-  class AudioDecoder {
-    constructor(options) { this.options = options;this.state = 'configured'; }
-    configure() {} decode() { this.options.output({ numberOfFrames: 2, numberOfChannels: 1, copyTo(buffer) { buffer.set(samples); }, close() { audioClosed++; } }); }
-    async flush() {} close() { this.state = 'closed'; }
-  }
-  class OfflineAudioContext {
-    createBuffer() { return { copyToChannel() {} }; } createBufferSource() { return { connect() {}, start() {} }; }
-    async startRendering() { return { getChannelData: () => samples }; }
-  }
-  class VideoDecoder {
-    static async isConfigSupported() { return { supported: true }; }
-    constructor(options) { this.options = options;this.state = 'configured'; }
-    configure() {} decode() { this.options.output({ timestamp: 1e6, close() { frameClosed++; } }); }
-    async flush() {} close() { this.state = 'closed'; }
-  }
-  await withGlobals({ AudioDecoder, OfflineAudioContext, VideoDecoder, EncodedAudioChunk: class {}, EncodedVideoChunk: class {}, createImageBitmap: async () => ({ close() { bitmapClosed++; } }) }, async () => {
-    assert.equal(await decodeAudio16k(audioMp4, audioSamples), samples);
-    const frames = await decodeKeyframes(videoMp4, [{ ts: 1, data: new Uint8Array(1) }]);
-    assert.equal(frames[0].ts, 1);assert.equal(audioClosed, 1);assert.equal(frameClosed, 1);assert.equal(bitmapClosed, 0);
-    frames[0].bitmap.close();assert.equal(bitmapClosed, 1);
+test('streaming video emits one bitmap at a time and preserves caller ownership',async()=>{
+  let open=0,peak=0,framesClosed=0,received=0;
+  class VideoDecoder{static async isConfigSupported(){return {supported:true};}constructor(o){this.o=o;this.state='configured';}configure(){}decode(k){this.o.output({timestamp:k.timestamp,close(){framesClosed++;}});}async flush(){}close(){this.state='closed';}}
+  await withGlobals({VideoDecoder,EncodedVideoChunk:class{constructor(o){Object.assign(this,o);}},createImageBitmap:async()=>{open++;peak=Math.max(peak,open);return {close(){open--;}};}},async()=>{
+    const frames=Array.from({length:60},(_,ts)=>({ts,data:new Uint8Array(1)}));
+    const out=await decodeKeyframes(videoMp4,frames,{onFrame:async frame=>{received++;await tick();frame.bitmap.close();}});
+    assert.equal(received,60);assert.equal(framesClosed,60);assert.equal(peak,1);assert.equal(open,0);assert.deepEqual(out,[]);
   });
 });

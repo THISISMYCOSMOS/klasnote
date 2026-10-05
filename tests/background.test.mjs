@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {SUMMARY_FORMAT} from '../extension/src/core/pack.js';
 import {DEFAULT_SETTINGS,classifySender,safeName,parseSummary,cleanSettings,checkPayload} from '../extension/src/core/policy.js';
 
 const id='0123456789abcdef',ext='klihhclhnhhmldcbnkpampimkjafmbdm',self=`chrome-extension://${ext}/`;
@@ -7,7 +8,7 @@ const ui={id:ext,url:self+'confirm.html?id='+id,tab:{id:1}};
 let data,nativeCount,downloads,cache,pack,engineCount,nativeDelay=5,downloadFailures=0,panelOpens=[],lectureState='done',enqueueCount=0;
 const clone=v=>structuredClone(v);
 const summary={overview:'개요',slides:[{s:1,summary:['핵심'],comment:'설명'}],exam:['점검'],corrections:[]};
-function reset(){data={settings:{...DEFAULT_SETTINGS,consent:true,mode:'ai',provider:'claude'},opened:{[id]:1},statuses:{},metadata:{[id]:{course:'과목',title:'강의'}}};nativeCount=0;downloads=0;cache=null;engineCount=0;pack={prompt:'강의: 테스트',images:[],slideCount:1,estimate:{total:2000}};}
+function reset(){data={settings:{...DEFAULT_SETTINGS,consent:true,asrConsent:true,mode:'ai',provider:'claude'},opened:{[id]:1},statuses:{},metadata:{[id]:{course:'과목',title:'강의'}}};nativeCount=0;downloads=0;cache=null;engineCount=0;pack={prompt:'강의: 테스트',images:[],slideCount:1,estimate:{total:2000}};}
 reset();
 globalThis.chrome={
   storage:{local:{get:async()=>clone(data),set:async v=>{data=clone(v);}}},
@@ -16,9 +17,9 @@ globalThis.chrome={
     sendMessage:async m=>{
       if(m.target!=='offscreen')return;
       engineCount++;
-      switch(m.cmd){case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
+      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return {ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
     },
-    connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage({ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
+    connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
   downloads:{download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;return downloads;}},
   offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},tabs:{create:async()=>({id:2})}
@@ -103,8 +104,20 @@ test('preparing estimate never invokes AI; concurrent/replayed confirmation char
   await assert.rejects(send('summarize',{contentId:id,requestId:ready.requestId}),/만료/);assert.equal(nativeCount,1);
 });
 test('cache and local mode use no AI; local report does not attach cached AI',async()=>{
-  reset();cache={provider:'claude',summary,aiLabel:'Claude'};let r=await send('prepareSummary',{contentId:id});assert.equal(r.cached,true);await send('summarize',{contentId:id,requestId:r.requestId});assert.equal(nativeCount,0);
+  reset();cache={provider:'claude',summary,summaryFormat:SUMMARY_FORMAT,aiLabel:'Claude'};let r=await send('prepareSummary',{contentId:id});assert.equal(r.cached,true);await send('summarize',{contentId:id,requestId:r.requestId});assert.equal(nativeCount,0);
   data.settings.mode='local';r=await send('prepareSummary',{contentId:id});assert.equal(r.local,true);await send('summarize',{contentId:id,requestId:r.requestId});assert.equal(nativeCount,0);
+});
+
+test('old slide summaries require a new explicit confirmation; new lecture notes reuse the cache',async()=>{
+  reset();cache={provider:'claude',summary,aiLabel:'Claude'};
+  const oldCache=cache;
+  const ready=await send('prepareNote',{contentId:id});
+  assert.equal(ready.cached,false);assert.equal(ready.outdatedSummary,true);
+  assert.equal(cache,oldCache);assert.equal(nativeCount,0);assert.equal(downloads,0);
+  await send('summarize',{contentId:id,requestId:ready.requestId});
+  assert.equal(nativeCount,1);assert.equal(cache.summaryFormat,SUMMARY_FORMAT);assert.deepEqual(cache.summary.slides,[]);
+  const again=await send('prepareNote',{contentId:id});assert.equal(again.cached,true);assert.equal(again.outdatedSummary,false);
+  await send('summarize',{contentId:id,requestId:again.requestId});assert.equal(nativeCount,1);
 });
 test('changed settings or payload invalidate confirmation without AI',async()=>{
   reset();let r=await send('prepareSummary',{contentId:id});data.settings.preset='save';await assert.rejects(send('summarize',{contentId:id,requestId:r.requestId}),/변경/);assert.equal(nativeCount,0);
@@ -126,7 +139,7 @@ test('transcription completion never creates a note or calls AI before explicit 
   const engineSender={id:ext,url:self+'offscreen.html'};
   for(const mode of ['local','ai'])for(const auto of [false,true]){
     reset();data.settings.mode=mode;data.settings.confirmBeforeSend=false;
-    data.statuses[id]={intent:{auto,force:false,settingsKey:JSON.stringify([mode,'claude','sonnet','gpt-5.6-terra','standard',false])}};
+    data.statuses[id]={intent:{auto,force:false,settingsKey:JSON.stringify([mode,'claude',data.settings.claudeModel,data.settings.codexModel,'standard',false])}};
     await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);await new Promise(r=>setTimeout(r,15));
     assert.equal(downloads,0);assert.equal(nativeCount,0);assert.equal(data.statuses[id].ticket,null);assert.equal(data.statuses[id].state,'done');
   }
@@ -163,7 +176,35 @@ test('"지금 요약" on an unprocessed lecture starts processing without openin
 
 test('Codex model setting is validated and used for Codex requests only',()=>{
   assert.equal(cleanSettings({codexModel:'gpt-5.6-luna'}).codexModel,'gpt-5.6-luna');
-  assert.equal(cleanSettings({}).codexModel,'gpt-5.6-terra');
+  assert.equal(cleanSettings({}).codexModel,'gpt-6-sol');
   assert.throws(()=>cleanSettings({codexModel:'evil; calc'}),/codexModel/);
   assert.throws(()=>cleanSettings({codexModel:'../x'}),/codexModel/);
+});
+
+test('legacy consent never grants external audio consent and strips the local model',()=>{
+ const migrated=cleanSettings({},{...DEFAULT_SETTINGS,consent:true,asrModel:'small'});
+ assert.equal(migrated.asrConsent,false);assert.equal(Object.hasOwn(migrated,'asrModel'),false);
+});
+test('Groq keys are available only through options, never KLAS or other extension views',async()=>{
+ reset();const before=nativeCount;
+ for(const sender of [ui,{id:ext,url:self+'sidepanel.html'},{id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:1}},{id:ext,url:self+'offscreen.html'}]){
+  for(const type of ['groqStatus','saveGroqKey','removeGroqKey','testGroq'])await assert.rejects(route({type,apiKey:'fixture-key'},sender));
+ }
+ assert.equal(nativeCount,before);assert.equal(JSON.stringify(data).includes('fixture-key'),false);
+ await route({type:'groqStatus'},{id:ext,url:self+'options.html'});assert.equal(nativeCount,before+1);
+});
+test('audio consent is required for initial enqueue and every native chunk',async()=>{
+ reset();data.settings.asrConsent=false;const before=nativeCount;
+ await assert.rejects(send('startProcessing',{contentId:id}),/Groq.*동의/);
+ await assert.rejects(route({type:'transcribeAudio',contentId:id},{id:ext,url:self+'offscreen.html'}),/동의/);
+ assert.equal(nativeCount,before);
+});
+test('cancellation during storage permission check never starts a late remote request',async()=>{
+ reset();const original=chrome.storage.local.get;let release;
+ chrome.storage.local.get=()=>new Promise(r=>{release=()=>r(clone(data));});
+ const engineSender={id:ext,url:self+'offscreen.html'};
+ const pending=route({type:'transcribeAudio',contentId:id,audioB64:'fixture',offset:0,duration:1},engineSender);
+ const rejected=assert.rejects(pending,{name:'AbortError'});
+ await route({type:'cancelAudio',contentId:id},engineSender);release();await rejected;
+ assert.equal(nativeCount,0);chrome.storage.local.get=original;
 });

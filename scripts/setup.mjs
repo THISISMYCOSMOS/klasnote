@@ -7,7 +7,7 @@ import {HOST_NAME as hostName,EXTENSION_ID as extensionId,platformPaths,macHostS
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const registryKey=`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName}`;
-const required=['extension/manifest.json','extension/sidepanel.html','extension/vendor/transformers.js','extension/vendor/mp4box.all.js','extension/vendor/ort-wasm-simd-threaded.asyncify.mjs','extension/vendor/ort-wasm-simd-threaded.asyncify.wasm','native-host/host.mjs'];
+const required=['extension/manifest.json','extension/sidepanel.html','extension/vendor/mp4box.all.js','native-host/host.mjs','native-host/groq.mjs'];
 
 function inspectTree(file){
   const stat=fs.lstatSync(file);
@@ -87,6 +87,7 @@ function install(){
   }
   fs.rmSync(old,{recursive:true,force:true});
   fs.copyFileSync(path.join(source,'native-host/host.mjs'),path.join(root,'host.mjs'));
+  fs.copyFileSync(path.join(source,'native-host/groq.mjs'),path.join(root,'groq.mjs'));
   if(P.platform==='win32'){
     // UTF-8 is enabled only in this host process; protocol stdout stays free of banners.
     fs.writeFileSync(launcher,'@echo off\r\nchcp 65001 >nul\r\n"'+process.execPath+'" "%~dp0host.mjs"\r\n');

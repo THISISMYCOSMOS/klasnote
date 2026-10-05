@@ -1,4 +1,4 @@
-// kwcommons 강의 mp4에서 필요한 구간의 오디오(PCM 16kHz)와 키프레임(슬라이드 후보)을 뽑는다.
+// kwcommons 강의 mp4에서 압축 AAC와 키프레임(슬라이드 후보)을 뽑는다.
 // 전제(실측 31강): progressive mp4, H.264 + AAC(44.1/48kHz), 키프레임 약 2초 간격. moov 위치는 앞·끝 모두 있음.
 // 전역 MP4Box(vendor/mp4box.all.js)가 먼저 로드되어 있어야 한다.
 
@@ -92,10 +92,10 @@ export async function loadContentInfo(src, contentId) {
 // 실측(2026-10-04, 31강): screen.mp4는 moov가 앞(faststart), ssmovie.mp4는 moov가 파일 끝에 있다. 둘 다 지원한다.
 const MAX_MOOV = 64 * 1024 * 1024;
 async function locateBoxes(src, url) {
-  const head = await src.getRange(url, 0, 65535);
+  const head = await src.getRange(url, 0, 65535, {maxBytes:65536});
   const readHeader = async (off) => {
     if (off + 16 <= head.length) return head.subarray(off, off + 16);
-    const h = await src.getRange(url, off, off + 15);
+    const h = await src.getRange(url, off, off + 15, {maxBytes:16});
     return h.length >= 8 ? h : null;
   };
   let off = 0, ftyp = null;
@@ -115,7 +115,7 @@ async function locateBoxes(src, url) {
     if (type === 'ftyp' && off + size <= head.length) ftyp = head.slice(off, off + size);
     if (type === 'moov') {
       if (size > MAX_MOOV) throw new Error('moov가 너무 큽니다.');
-      const moov = off + size <= head.length ? head.slice(off, off + size) : await src.getRange(url, off, off + size - 1);
+      const moov = off + size <= head.length ? head.slice(off, off + size) : await src.getRange(url, off, off + size - 1, {maxBytes:MAX_MOOV});
       if (moov.length !== size) throw new Error('moov를 끝까지 받지 못했습니다.');
       return { ftyp, moov };
     }
@@ -197,62 +197,8 @@ export async function fetchWindow(src, mp4, t0, t1, { slideEvery = 2, signal, ma
   };
 }
 
-// AAC 샘플 → 16kHz 모노 Float32Array
-export async function decodeAudio16k(mp4, samples, { signal } = {}) {
-  checkAbort(signal);
-  if (!samples.length) return new Float32Array(0);
-  const { sample_rate: rate, channel_count: ch } = mp4.audio.info.audio;
-  const parts = [];
-  let failure = null;
-  const dec = new AudioDecoder({
-    output: (ad) => {
-      try {
-      if (signal?.aborted) return;
-      const n = ad.numberOfFrames, c = ad.numberOfChannels;
-      const mono = new Float32Array(n);
-      const tmp = new Float32Array(n);
-      for (let i = 0; i < c; i++) {
-        ad.copyTo(tmp, { planeIndex: i, format: 'f32-planar' });
-        for (let j = 0; j < n; j++) mono[j] += tmp[j] / c;
-      }
-      parts.push(mono);
-      } catch(e) { failure=e; } finally { ad.close(); }
-    },
-    error: (e) => { failure=e; },
-  });
-  try {
-  dec.configure({ codec: mp4.audio.info.codec, sampleRate: rate, numberOfChannels: ch, description: mp4.audio.description });
-  for (const s of samples) {
-    dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: Math.round(s.ts * 1e6), duration: Math.round(s.dur * 1e6), data: s.data }));
-  }
-  await abortable(dec.flush(), signal, () => { if (dec.state !== 'closed') dec.close(); });
-  checkAbort(signal);
-  if(failure)throw failure;
-  } finally { if(dec.state!=='closed')dec.close(); }
-  const total = parts.reduce((a, p) => a + p.length, 0);
-  const pcm = new Float32Array(total);
-  let o = 0;
-  for (const p of parts) { pcm.set(p, o); o += p.length; }
-  return resample(pcm, rate, 16000, signal);
-}
-
-async function resample(pcm, from, to, signal) {
-  checkAbort(signal);
-  if (!pcm.length) return pcm;
-  const ctx = new OfflineAudioContext(1, Math.ceil(pcm.length * to / from), to);
-  const ab = ctx.createBuffer(1, pcm.length, from);
-  ab.copyToChannel(pcm, 0);
-  const node = ctx.createBufferSource();
-  node.buffer = ab;
-  node.connect(ctx.destination);
-  node.start();
-  const rendered = await abortable(ctx.startRendering(), signal);
-  checkAbort(signal);
-  return rendered.getChannelData(0);
-}
-
 // 키프레임 → { ts, bitmap } (가로 maxWidth로 축소)
-export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal } = {}) {
+export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal, onFrame } = {}) {
   checkAbort(signal);
   const out = [];
   if (!mp4.video || !keyframes.length) return out;
@@ -267,7 +213,11 @@ export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal 
       if (discard || signal?.aborted) { frame.close(); return; }
       const ts=frame.timestamp/1e6;
       pending.push(createImageBitmap(frame, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' })
-        .then((bitmap) => { if (discard || signal?.aborted) bitmap.close(); else out.push({ ts, bitmap }); },e=>{failure=e;})
+        .then(async (bitmap) => {
+          if (discard || signal?.aborted) bitmap.close();
+          else if (onFrame) { try { await onFrame({ ts, bitmap }); } catch(e) { bitmap.close(); throw e; } }
+          else out.push({ ts, bitmap });
+        }).catch(e=>{failure=e;})
         .finally(() => frame.close()));
     },
     error: (e) => { failure=e; },
@@ -283,7 +233,9 @@ export async function decodeKeyframes(mp4, keyframes, { maxWidth = 1280, signal 
   for (const k of keyframes) {
     dec.decode(new EncodedVideoChunk({ type: 'key', timestamp: Math.round(k.ts * 1e6), data: k.data }));
     await abortable(dec.flush(), signal, () => { if (dec.state !== 'closed') dec.close(); });
+    await abortable(Promise.all(pending.splice(0)), signal);
     checkAbort(signal);
+    if(failure)throw failure;
   }
   await abortable(Promise.all(pending), signal);
   checkAbort(signal);

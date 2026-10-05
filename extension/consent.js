@@ -32,6 +32,7 @@ async function onContinue() {
     result.textContent = '미리보기 모드: 실제 저장은 확장 프로그램 환경에서만 됩니다.';
     return;
   }
+  if(!el('asrConsent').checked){result.textContent='Groq 음성 전송 동의를 확인하세요.';return;}
   result.textContent = '저장 중…';
 
   if (mode === 'ai') {
@@ -46,12 +47,13 @@ async function onContinue() {
     }
   }
 
-  const res = await callBg('setConsent', { mode });
+  const res = await callBg('setConsent', { mode,asrConsent:true });
   if (res.ok === false) {
     result.textContent = `저장 실패: ${res.error || ''}`;
     return;
   }
-  result.textContent = mode === 'ai' ? 'AI 모드로 저장했습니다.' : '로컬 전용 모드로 저장했습니다.';
+  result.textContent = mode === 'ai' ? 'AI 모드로 저장했습니다.' : '원문만 모드로 저장했습니다.';
+  await callBg('openOptions');
   setTimeout(() => { if (hasRuntime()) window.close(); }, 600);
 }
 

@@ -63,7 +63,7 @@ function renderReady(res, settings, host) {
   el('est-h').parentElement.hidden=!!(res.local||res.cached);
 
   el('lecTitle').textContent = res.title || `강의 ${contentId}`;
-  el('lecDest').textContent = res.local ? '전송 없음(로컬 전용)' : describeDestination(settings, host);
+  el('lecDest').textContent = res.local ? '요약 AI 전송 없음 (받아쓰기는 Groq)' : describeDestination(settings, host);
 
   const est = res.estimate || { text: 0, images: 0, overhead: 0, total: 0 };
   el('estText').textContent = `${nf.format(est.text || 0)} 토큰`;
@@ -82,7 +82,7 @@ function renderReady(res, settings, host) {
     setConfirmAction('저장된 결과 다운로드', doSummarize);
   } else {
     notice.className = 'notice notice--cloud';
-    notice.textContent = '받아쓴 대본 일부와 선택된 슬라이드 이미지가 위 계정으로 전송됩니다. 강의 영상 자체는 전송되지 않습니다.';
+    notice.textContent = (res.outdatedSummary ? '저장된 요약은 이전 방식입니다. 강의 전체 핵심·교수님 강조를 반영하는 방식으로 다시 만들며 AI 사용량이 소모됩니다. ' : '') + '받아쓴 대본과 선택된 슬라이드 이미지가 위 계정으로 전송됩니다. 강의 영상 자체는 전송되지 않습니다.';
     setConfirmAction('AI로 보내고 요약 만들기', doSummarize);
   }
 

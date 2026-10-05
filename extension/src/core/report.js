@@ -64,17 +64,13 @@ export async function buildReport({ lecture, groups, summary, meta }) {
     ? `chrome-extension://${meta.extensionId}/note-launch.html?id=${lecture.contentId.toLowerCase()}` : null;
   const corrections = correctionMatcher((summary?.corrections ?? []).filter((c) => Array.isArray(c) && c.length === 2).slice(0, 60));
   const scriptHash = await sha256b64(VIEW_SCRIPT);
-  const bySlide = new Map((summary?.slides ?? []).map((s) => [Number(s.s), s]));
   const cards = [];
   for (const [i, g] of groups.entries()) {
-    const s = bySlide.get(i + 1);
     const img = g.blob ? `<img loading="lazy" src="${await blobToDataUrl(g.blob)}" alt="슬라이드 ${i + 1}">` : '';
-    const sum = (s?.summary ?? []).map((t) => `<li>${esc(t)}</li>`).join('');
     const verbatim = toParagraphs(g.segs).map((x) => `<p><time>${mmss(x.start)}</time> ${applyCorrections(x.text, corrections)}</p>`).join('');
     cards.push(`<section class="card" id="s${i + 1}">
 <header><b>S${i + 1}</b> <time>${mmss(g.start)} – ${mmss(g.end)}</time></header>
 <div class="body"><div class="img">${img}</div><div class="text">
-<div class="sum">${sum ? `<ul>${sum}</ul>` : ''}${s?.comment ? `<p class="comment">💬 ${esc(s.comment)}</p>` : ''}${!sum && !s?.comment ? '<p class="muted">요약 없음</p>' : ''}</div>
 <div class="raw"><h4>교수님 원문</h4>${verbatim || '<p class="muted">(발화 없음)</p>'}</div>
 </div></div></section>`);
   }
@@ -97,10 +93,10 @@ main{max-width:1100px;margin:0 auto;padding:24px 16px 64px}h1{font-size:22px;mar
 .card header{padding:8px 14px;background:var(--card);border-bottom:1px solid var(--line);font-size:13px}.card header time{color:var(--muted);margin-left:6px}
 .body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;padding:14px}
 .img img{width:100%;border-radius:6px;border:1px solid var(--line)}
-.sum ul{margin:0;padding-left:18px}.comment{margin:8px 0 0}.muted{color:var(--muted)}
+.overview,.lecture-summary li{white-space:pre-line}.muted{color:var(--muted)}
 .raw h4{margin:12px 0 4px;font-size:13px;color:var(--muted)}.raw p{margin:0 0 8px;font-size:14px}.raw time{display:inline-block;margin-right:6px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 mark{background:var(--mark);color:inherit;border-radius:3px;padding:0 2px}
-body[data-view=sum] .raw{display:none}body[data-view=raw] .sum{display:none}body[data-view=raw] .raw h4{margin-top:0}
+body[data-view=sum] .card{display:none}body[data-view=raw] .lecture-summary{display:none}body[data-view=raw] .raw h4{margin-top:0}
 @media (max-width:760px){.body{grid-template-columns:1fr}}
 @media print{.view{display:none}.card{page-break-inside:avoid}}
 </style></head><body data-view="both"><main>
@@ -112,7 +108,7 @@ ${lecture.period ? `<div><dt>학습기간</dt><dd>${esc(lecture.period)}</dd></d
 <div><dt>강의 길이</dt><dd>${mmss(lecture.duration)} · 슬라이드 ${groups.length}장</dd></div>
 <div><dt>정리</dt><dd>받아쓰기 ${esc(meta.asrModel)} · 요약 ${esc(meta.aiLabel)} · ${esc(meta.createdAt)}</dd></div>
 </dl>
-${summary ? `<h2>강의 핵심</h2><div class="box"><p>${esc(summary.overview)}</p></div>${exam ? `<h2>시험 포인트</h2><div class="box"><ul>${exam}</ul></div>` : ''}` : '<div class="box"><p>AI 요약 없이 원문만 정리한 파일입니다.</p></div>'}
+${summary ? `<section class="lecture-summary"><h2>강의 전체 핵심</h2><div class="box"><p class="overview">${esc(summary.overview)}</p></div>${exam ? `<h2>시험 포인트</h2><div class="box"><ul>${exam}</ul></div>` : ''}</section>` : '<div class="box"><p>AI 요약 없이 원문만 정리한 파일입니다.</p></div>'}
 ${noteUrl ? `<a class="note-action" href="${esc(noteUrl)}" target="_blank" rel="noopener noreferrer">요약노트 만들기</a><p class="note-help">KLAS 강의 요약 확장이 설치된 Chrome에서 열면, 저장된 받아쓰기로 요약을 준비합니다. 확인 후에만 AI로 전송합니다.</p>` : ''}
 <div class="view" role="group" aria-label="보기 방식"><button data-v="both" aria-pressed="true">함께 보기</button><button data-v="sum" aria-pressed="false">요약만</button><button data-v="raw" aria-pressed="false">원문만</button></div>
 ${cards.join('\n')}

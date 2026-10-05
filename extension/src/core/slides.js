@@ -21,9 +21,10 @@ function diff(a, b) {
 
 // 구간을 나눠 처리해도 이어지도록 상태를 가진 감지기.
 // push(frames)는 확정된 슬라이드(다음 슬라이드가 시작되어 끝이 정해진 것)를 반환한다.
-export function createSlideDetector({ threshold = 0.04, minDuration = 4 } = {}) {
-  let cur = null, curT = null;
+export function createSlideDetector({ threshold = 0.04, minDuration = 4, seed = null } = {}) {
+  let cur = seed ? {...seed,end:null} : null, curT = seed ? thumb(seed.bitmap) : null;
   return {
+    checkpoint(until) { return cur ? {...cur,end:until} : null; },
     dispose() { cur?.bitmap.close(); cur = null; curT = null; },
     push(frames) {
       const done = [];

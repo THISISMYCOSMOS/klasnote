@@ -2,337 +2,256 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { createModelProgress } from '../extension/src/core/model-progress.js';
 
-const tick = () => new Promise((resolve) => setImmediate(resolve));
-function deferred() {
-  let resolve;
-  const promise = new Promise((r) => { resolve = r; });
-  return { promise, resolve };
-}
+const id = '0123456789abcdef', nextId = '1123456789abcdef', lastId = '2123456789abcdef';
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function deferred() { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; }
 async function until(check) {
-  for (let i = 0; i < 100; i++) { if (check()) return; await tick(); }
-  assert.fail('expected engine event was not emitted');
+  for (let i=0;i<200;i++) { if (await check()) return; await tick(); }
+  assert.fail('expected remote engine event was not emitted');
 }
-function source(relative) {
-  const file = new URL(relative, import.meta.url);
-  return readFileSync(file, 'utf8').replace(/^import .*;\r?\n/gm, '').replaceAll('import.meta.url', JSON.stringify(file.href));
+function abortable(promise, signal) {
+  return new Promise((resolve,reject) => {
+    const finish = (fn,value) => { signal.removeEventListener('abort',abort); fn(value); };
+    const abort = () => finish(reject,signal.reason || new DOMException('cancelled','AbortError'));
+    signal.addEventListener('abort',abort,{once:true});
+    Promise.resolve(promise).then(value=>finish(resolve,value),error=>finish(reject,error));
+    if(signal.aborted)abort();
+  });
 }
-const id = '0123456789abcdef';
+const failure = (code, retryAt) => Object.assign(new Error('safe fixture failure'), {code,retryAt});
 
-function engine({ onLoad, onTranscribe, onFetch, onDecode, onPut, database = new Map() } = {}) {
-  const instances = [], messages = [], statuses = [], fetches = [], writes = [], bitmaps = [], decodes = [];
-  const rows = (name) => {
-    if (!database.has(name)) database.set(name, new Map());
-    return database.get(name);
-  };
+function engine({ duration=360, onTranscribe, onFetch, onDecode, onPut, database=new Map() } = {}) {
+  const requests=[],cancelRequests=[],statuses=[],fetches=[],writes=[],bitmaps=[],jpegCalls=[],seeds=[],deletions=[];
+  const tables = name => { if(!database.has(name))database.set(name,new Map());return database.get(name); };
+  const key = row => row.start===undefined?row.contentId:`${row.contentId}/${row.start}`;
   const store = {
-    get: async (name, key) => structuredClone(rows(name).get(key)),
-    put: async (name, row) => { await onPut?.(name, row); return rows(name).set(row.contentId, structuredClone(row)); },
-    putMany: async (name, values) => {
-      for (const row of values) {
-        rows(name).set(`${row.contentId}/${row.start}`, structuredClone(row));
-        if (name === 'segments') writes.push(row.start);
-      }
+    get: async (name,itemKey) => structuredClone(tables(name).get(itemKey)),
+    put: async (name,row) => { await onPut?.(name,row);tables(name).set(key(row),structuredClone(row)); },
+    putMany: async (name,rows) => {
+      for(const row of rows) { tables(name).set(key(row),structuredClone(row));writes.push({name,...structuredClone(row)}); }
     },
-    byLecture: async (name, contentId) => [...rows(name).values()].filter((r) => r.contentId === contentId).map((r) => structuredClone(r)).sort((a, b) => a.start - b.start),
-    deleteFrom: async (contentId, from) => {
-      for (const name of ['slides', 'segments']) for (const [key, row] of rows(name)) if (row.contentId === contentId && row.start >= from) rows(name).delete(key);
+    byLecture: async (name,contentId) => [...tables(name).values()].filter(row=>row.contentId===contentId).map(row=>structuredClone(row)).sort((a,b)=>a.start-b.start),
+    deleteFrom: async (contentId,from) => {
+      deletions.push({contentId,from});
+      for(const name of ['slides','segments'])for(const [itemKey,row]of tables(name))if(row.contentId===contentId&&row.start>=from)tables(name).delete(itemKey);
     },
+    deleteLecture: async contentId => { for(const table of database.values())for(const [itemKey,row]of table)if(row.contentId===contentId)table.delete(itemKey); },
   };
-  class Worker {
-    constructor() { this.dead = false; this.number = instances.length; instances.push(this); }
-    terminate() { this.dead = true; }
-    postMessage(msg) {
-      messages.push({ worker: this.number, ...msg });
-      let response;
-      try {
-        response = msg.cmd === 'load'
-          ? (onLoad?.(msg, this) ?? { device: 'webgpu' })
-          : (onTranscribe?.(msg, this) ?? { segs: [{ start: msg.offset, end: msg.offset + 1, text: 'test' }] });
-      } catch (e) { response = Promise.reject(e); }
-      Promise.resolve(response).then(
-        (r) => { if (!this.dead) this.onmessage?.({ data: { id: msg.id, ok: true, ...r } }); },
-        (e) => { if (!this.dead) this.onmessage?.({ data: { id: msg.id, ok: false, error: e.message, stack: e.stack } }); },
-      );
+  const bitmap = screen => { const item={screen,width:1280,height:720,closed:0,close(){this.closed++;}};bitmaps.push(item);return item; };
+  let now=1_700_000_000_000,timerId=0;
+  const timers=new Map();
+  class ClockDate extends Date { static now(){return now;} }
+  const clock={get now(){return now;},async advance(ms){
+    now+=ms;
+    for(let i=0;i<100;i++){
+      const ready=[...timers].filter(([,timer])=>timer.due<=now).sort((a,b)=>a[1].due-b[1].due);
+      if(!ready.length)return;
+      for(const [timerKey,timer]of ready){if(!timers.delete(timerKey))continue;timer.fn();}
+      await tick();
     }
+    assert.fail('fixture timer loop');
+  }};
+  // Run the actual slide detector. Flat mock frames make image differences explicit.
+  class Canvas {
+    constructor(width,height){this.width=width;this.height=height;}
+    getContext(){return {drawImage:frame=>{this.screen=frame.screen;},getImageData:()=>({data:new Uint8ClampedArray(this.width*this.height*4).fill(this.screen)})};}
   }
-  const context = vm.createContext({
-    URL, Worker, Float32Array, Date, AbortController, fetch: async () => {}, console: { warn() {}, error() {} },
-    setTimeout: () => 1, clearTimeout() {}, store,
-    chrome: { runtime: { id: 'test', getURL: (p) => 'chrome-extension://test/' + p, onMessage: { addListener() {} }, sendMessage: async (msg) => { statuses.push(msg.patch); return {}; } } },
-    createSource: () => ({}), loadContentInfo: async (_, contentId) => ({ contentId, title: 'test', duration: 360, mediaUrl: 'test' }),
-    openMp4: async () => ({ duration: 360 }),
-    fetchWindow: async (_, __, t, t1, opts) => { fetches.push(t); await onFetch?.(t, t1, opts); return { audio: [t], keyframes: [{ ts: t, end: t1 }] }; },
-    decodeAudio16k: async (_, audio, opts) => { decodes.push(audio[0]); await onDecode?.(audio, opts); return new Float32Array(16); },
-    decodeKeyframes: async (_, frames) => frames.map((frame) => {
-      const bitmap = { closed: 0, close() { this.closed++; } };
-      bitmaps.push(bitmap);
-      return { ...frame, bitmap };
-    }),
-    createSlideDetector: () => ({ push: (frames) => frames.map((f) => ({ ...f, start: f.ts })), finish: () => [], dispose() {} }),
-    toJpeg: async () => null, buildPack() {}, groupBySlide() {}, buildReport() {},
-  });
-  vm.runInContext(source('../extension/offscreen.js') + '\nglobalThis.api = { ensureWorkers, terminateWorkers, run, handlers, getPool: () => workers };', context);
-  return { ...context.api, instances, messages, statuses, fetches, writes, bitmaps, decodes, store, database };
-}
-
-test('ASR pool keeps exactly one model on GPU and CPU', async () => {
-  const f = engine();
-  await f.ensureWorkers(5, 'small');
-  assert.equal(f.instances.length, 1);
-  await f.handlers.playerAlive();
-  assert.equal(f.getPool().length, 1);
-  assert.equal(f.instances.length, 1);
-  const cpu = engine({ onLoad: () => ({ device: 'wasm' }) });
-  await cpu.ensureWorkers(2, 'small');
-  await cpu.ensureWorkers(2, 'small');
-  assert.equal(cpu.instances.length, 1);
-  f.terminateWorkers(); cpu.terminateWorkers();
-});
-
-test('ASR pool terminates failed and still-loading workers without orphaning a model', async () => {
-  const failed = engine({ onLoad: () => { throw Error('load failed'); } });
-  await assert.rejects(failed.ensureWorkers(1, 'small'), /load failed/);
-  assert.equal(failed.instances[0].dead, true);
-  assert.equal(failed.getPool().length, 0);
-  const gate = deferred();
-  const loading = engine({ onLoad: () => gate.promise });
-  const ready = loading.ensureWorkers(1, 'small');
-  await tick();
-  loading.terminateWorkers();
-  await assert.rejects(ready, /작업자 종료/);
-  gate.resolve({ device: 'webgpu' });
-  assert.equal(loading.instances[0].dead, true);
-  assert.equal(loading.getPool().length, 0);
-});
-
-test('ASR engine waits for the current window before dispatching the next one', async () => {
-  const first = deferred();
-  const f = engine({ onTranscribe: (msg) => msg.offset === 0 ? first.promise : undefined });
-  const running = f.run({ contentId: id, asrModel: 'small' });
-  await until(() => f.messages.some((m) => m.cmd === 'transcribe' && m.offset === 0));
-  assert.deepEqual(f.messages.filter((m) => m.cmd === 'transcribe').map((m) => m.offset), [0]);
-  assert.deepEqual(f.fetches, [0, 120], 'only one next encoded window is prefetched');
-  assert.deepEqual(f.decodes, [0], 'next audio is not decoded while current inference runs');
-  assert.deepEqual(f.writes, []);
-  first.resolve({ segs: [{ start: 0, end: 1, text: 'first' }] });
-  await running;
-  assert.deepEqual(f.writes, [0, 120, 240]);
-  assert.equal((await f.store.get('lectures', id)).state, 'done');
-  assert.ok(f.bitmaps.every((b) => b.closed === 1));
-  f.terminateWorkers();
-});
-
-test('ASR cancels a pending download and advances the queued lecture immediately', async () => {
-  const nextId = 'fedcba9876543210';
-  let first = true, aborted = false;
-  const f = engine({ onFetch: (_, __, { signal }) => {
-    if (!first) return;
-    first = false;
-    return new Promise((_, reject) => signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(Error('aborted'), { name: 'AbortError' })); }, { once: true }));
-  } });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  await until(() => f.fetches.length === 1);
-  await f.handlers.enqueue({ contentId: nextId, asrModel: 'base' });
-  await f.handlers.cancel({ contentId: id });
-  await until(() => f.statuses.some((s) => s.state === 'done'));
-  assert.equal(aborted, true);
-  assert.equal((await f.store.get('lectures', id)).state, 'paused');
-  assert.equal((await f.store.get('lectures', nextId)).state, 'done');
-  assert.deepEqual(await f.store.byLecture('segments', id), []);
-});
-
-test('ASR aborts prefetched bytes on cancel without decoding or committing them', async () => {
-  const gate = deferred();
-  let aborted = false;
-  const f = engine({ onTranscribe: () => gate.promise, onFetch: (t, _, { signal }) => {
-    if (t !== 120) return;
-    return new Promise((_, reject) => signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(Error('aborted'), { name: 'AbortError' })); }, { once: true }));
-  } });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  await until(() => f.fetches.includes(120));
-  await f.handlers.cancel({ contentId: id });
-  await until(() => f.statuses.some((s) => s.state === 'paused'));
-  assert.equal(aborted, true);
-  assert.deepEqual(f.decodes, [0]);
-  assert.deepEqual(f.writes, []);
-  assert.ok(f.instances.every((w) => w.dead));
-  gate.resolve({ segs: [] });
-});
-
-test('ASR forwards decode cancellation and starts the next lecture without waiting for old PCM', async () => {
-  const nextId = 'fedcba9876543210';
-  let first = true, aborted = false;
-  const f = engine({ onDecode: (_, { signal }) => {
-    if (!first) return;
-    first = false;
-    return new Promise((_, reject) => signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(Error('aborted'), { name: 'AbortError' })); }, { once: true }));
-  } });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  await until(() => f.decodes.length === 1);
-  await f.handlers.enqueue({ contentId: nextId, asrModel: 'base' });
-  await f.handlers.cancel({ contentId: id });
-  await until(() => f.statuses.some((s) => s.state === 'done'));
-  assert.equal(aborted, true);
-  assert.equal((await f.store.get('lectures', id)).state, 'paused');
-  assert.equal((await f.store.get('lectures', nextId)).state, 'done');
-  assert.deepEqual(await f.store.byLecture('segments', id), []);
-});
-
-test('ASR cancellation after the final checkpoint remains paused rather than reporting done', async () => {
-  const gate = deferred();
-  let reached = false;
-  const f = engine({ onPut: (name, row) => {
-    if (name === 'lectures' && row.progressSec === 360 && row.state === 'running') { reached = true; return gate.promise; }
-  } });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  await until(() => reached);
-  await f.handlers.cancel({ contentId: id });
-  gate.resolve();
-  await until(() => f.statuses.some((s) => s.state === 'paused'));
-  assert.equal((await f.store.get('lectures', id)).state, 'paused');
-  assert.equal(f.statuses.some((s) => s.state === 'done'), false);
-});
-
-test('ASR retries wait behind the running lecture, deduplicate, and preserve FIFO priority', async () => {
-  const nextId = 'fedcba9876543210', lastId = 'aaaabbbbccccdddd';
-  const gate = deferred();
-  const f = engine({ onTranscribe: (msg) => msg.offset === 0 ? gate.promise : undefined });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  await until(() => f.messages.some((m) => m.cmd === 'transcribe'));
-  await f.handlers.enqueue({ contentId: nextId, asrModel: 'base' });
-  await f.handlers.enqueue({ contentId: lastId, asrModel: 'base' });
-  await f.handlers.enqueue({ contentId: nextId, asrModel: 'base' });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'base' });
-  assert.equal((await f.handlers.jobs()).running, id);
-  assert.deepEqual(Array.from((await f.handlers.jobs()).queued), [nextId, lastId]);
-  assert.equal(await f.store.get('lectures', nextId), undefined);
-  assert.equal(f.instances.length, 1);
-  gate.resolve({ segs: [{ start: 0, end: 1, text: 'first' }] });
-  await until(() => f.statuses.filter((s) => s.state === 'done').length === 3);
-  await tick();
-  assert.equal((await f.handlers.jobs()).running, null);
-  assert.deepEqual([...f.database.get('lectures').values()].map((l) => l.contentId), [id, nextId, lastId]);
-  assert.ok([...f.database.get('lectures').values()].every((l) => l.state === 'done'));
-  assert.equal(f.instances.length, 1, 'queued lectures share one model');
-  assert.ok(f.instances.every((w) => w.dead), 'model is released as soon as the queue finishes');
-});
-
-async function pausedFixture() {
-  let hold = true;
-  const gate = deferred();
-  const f = engine({ onTranscribe: (msg) => hold && msg.offset >= 120 ? gate.promise : undefined });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'small' });
-  await until(() => f.statuses.some((s) => s.progress === 1 / 3));
-  await f.handlers.cancel({ contentId: id });
-  await until(() => f.statuses.some((s) => s.state === 'paused'));
-  assert.ok(f.instances.every((w) => w.dead));
-  assert.equal(f.getPool().length, 0);
-  assert.equal((await f.store.get('lectures', id)).progressSec, 120);
-  assert.deepEqual(f.writes, [0]);
-  hold = false;
-  gate.resolve({ segs: [{ start: 999, end: 1000, text: 'late reply' }] });
-  await tick();
-  assert.deepEqual(f.writes, [0]);
-  return f;
-}
-
-test('ASR cancel releases workers immediately and retry resumes only committed windows', async () => {
-  const f = await pausedFixture();
-  const fetchedBefore = f.fetches.length;
-  await f.handlers.enqueue({ contentId: id, asrModel: 'small' });
-  await until(() => f.statuses.some((s) => s.state === 'done'));
-  assert.deepEqual(f.fetches.slice(fetchedBefore), [120, 240]);
-  assert.deepEqual(f.writes, [0, 120, 240]);
-  assert.ok(f.bitmaps.every((b) => b.closed === 1));
-  f.terminateWorkers();
-});
-
-test('ASR reload resumes from persisted checkpoint in a fresh engine', async () => {
-  const previous = await pausedFixture();
-  const fresh = engine({ database: previous.database });
-  await fresh.run({ contentId: id, asrModel: 'small' });
-  assert.deepEqual(fresh.fetches, [120, 240]);
-  assert.deepEqual(fresh.writes, [120, 240]);
-  assert.equal((await fresh.store.get('lectures', id)).state, 'done');
-  fresh.terminateWorkers();
-});
-
-test('ASR cancel advances to the next queued lecture without waiting for abandoned inference', async () => {
-  const nextId = 'fedcba9876543210';
-  const abandoned = deferred();
-  const f = engine({
-    onLoad: () => ({ device: 'wasm' }),
-    onTranscribe: (_, worker) => worker.number === 0 ? abandoned.promise : undefined,
-  });
-  await f.handlers.enqueue({ contentId: id, asrModel: 'small' });
-  await until(() => f.messages.some((m) => m.cmd === 'transcribe'));
-  await f.handlers.enqueue({ contentId: nextId, asrModel: 'small' });
-  assert.deepEqual(Array.from((await f.handlers.jobs()).queued), [nextId]);
-  await f.handlers.cancel({ contentId: id });
-  await until(() => f.statuses.some((s) => s.state === 'done'));
-  await tick();
-  assert.equal(f.instances[0].dead, true);
-  assert.equal((await f.store.get('lectures', id)).state, 'paused');
-  assert.equal((await f.store.get('lectures', nextId)).state, 'done');
-  assert.equal((await f.handlers.jobs()).running, null);
-  assert.deepEqual(Array.from((await f.handlers.jobs()).queued), []);
-  abandoned.resolve({ segs: [{ start: 999, end: 1000, text: 'abandoned reply' }] });
-  await tick();
-  assert.deepEqual(await f.store.byLecture('segments', id), []);
-  assert.deepEqual((await f.store.byLecture('segments', nextId)).map((s) => s.start), [0, 120, 240]);
-  assert.ok(f.bitmaps.every((b) => b.closed === 1));
-  f.terminateWorkers();
-});
-
-test('ASR worker serializes retry and release and sends the original failure stack', async () => {
-  const events = [], replies = [], gate = deferred();
-  let first = true;
-  const context = vm.createContext({
-    Float32Array, createModelProgress, console: { warn() {}, error() {} },
-    self: { postMessage: (msg) => replies.push(msg) },
-    loadAsr: async () => { events.push('load'); return { device: 'webgpu' }; },
-    releaseAsr: async () => { events.push('release'); },
-    transcribe: async () => {
-      events.push('transcribe');
-      if (first) { first = false; const e = Error("Cannot read properties of undefined (reading 'destroy')"); e.stack = 'original ORT stack'; throw e; }
-      await gate.promise;
-      events.push('completed');
+  const context=vm.createContext({
+    URL,AbortController,DOMException,Date:ClockDate,Uint8Array,Uint8ClampedArray,Float32Array,OffscreenCanvas:Canvas,
+    setTimeout:(fn,ms)=>{const timerKey=++timerId;timers.set(timerKey,{fn,due:now+ms});return timerKey;},clearTimeout:timerKey=>timers.delete(timerKey),
+    store,console,fetch:async()=>{throw new Error('real network is forbidden in engine unit tests');},
+    chrome:{runtime:{id:'test',getURL:path=>'chrome-extension://test/'+path,onMessage:{addListener(){}},sendMessage:async message=>{
+      if(message.type==='status'){statuses.push({contentId:message.contentId,...structuredClone(message.patch)});return {ok:true};}
+      if(message.type==='cancelAudio'){cancelRequests.push(message.contentId);return {ok:true};}
+      assert.equal(message.type,'transcribeAudio');requests.push(structuredClone(message));
+      try{
+        const result=await (onTranscribe?.(message,requests.length) ?? {segments:[{start:message.offset,end:message.offset+Math.min(1,message.duration),text:'fixture transcript'}]});
+        return {ok:true,...result};
+      }catch(error){return {ok:false,error:error.message,code:error.code,retryAt:error.retryAt};}
+    }}},
+    createSource:()=>({}),
+    loadContentInfo:async(_,contentId)=>({contentId,title:'fixture lecture',duration,mediaUrl:contentId}),
+    openMp4:async(_,contentId)=>({contentId,duration}),
+    fetchWindow:async(_,mp4,start,end,options)=>{
+      const request={contentId:mp4.contentId,start,end,options};fetches.push(request);
+      await abortable(onFetch?.(request) ?? Promise.resolve(),options.signal);
+      return {audio:[{ts:start,dur:end-start,data:new Uint8Array([1])}],keyframes:[{ts:start,screen:start<120?0:255}]};
+    },
+    remuxAudioM4a:(_,audio)=>({offset:audio[0].ts,duration:audio[0].dur,bytes:new Uint8Array([1,2,3])}),
+    audioBase64:()=> 'fixtureM4A',
+    decodeKeyframes:async(mp4,frames,{signal,onFrame})=>{
+      assert.equal(typeof onFrame,'function','engine must consume decoded frames as a stream');
+      await abortable(onDecode?.(mp4,frames,signal) ?? Promise.resolve(),signal);
+      for(const frame of frames){if(signal.aborted)throw signal.reason;await onFrame({ts:frame.ts,bitmap:bitmap(frame.screen)});}
       return [];
     },
+    createImageBitmap:async blob=>{const result=bitmap(blob.screen);seeds.push(result);return result;},
+    toJpeg:async frame=>{assert.equal(frame.closed,0,'JPEG uses a live bitmap');jpegCalls.push(frame);return {screen:frame.screen};},
+    buildPack(){},groupBySlide(){},buildReport(){},
   });
-  vm.runInContext(source('../extension/asr-worker.js'), context);
-  context.self.onmessage({ data: { id: 1, cmd: 'load', asrModel: 'small' } });
-  await until(() => replies.some((r) => r.id === 1 && r.ok));
-  context.self.onmessage({ data: { id: 2, cmd: 'transcribe', pcm: new Float32Array(1).buffer, offset: 0 } });
-  context.self.onmessage({ data: { id: 3, cmd: 'release' } });
-  await until(() => events.filter((e) => e === 'transcribe').length === 2);
-  assert.deepEqual(events, ['load', 'transcribe', 'release', 'load', 'transcribe']);
-  assert.equal(replies.find((r) => r.diagnostic)?.diagnostic, 'original ORT stack');
-  gate.resolve();
-  await until(() => replies.some((r) => r.id === 3 && r.ok));
-  assert.deepEqual(events.slice(-2), ['completed', 'release']);
+  const slideSource=readFileSync(new URL('../extension/src/core/slides.js',import.meta.url),'utf8').split('// 슬라이드 가장자리')[0].replace(/^export /gm,'');
+  vm.runInContext(slideSource,context);
+  const source=readFileSync(new URL('../extension/offscreen.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+  vm.runInContext(source+'\nglobalThis.api={run,handlers};',context);
+  const idle=()=>until(async()=>{const jobs=await context.api.handlers.jobs();return !jobs.running&&!jobs.queued.length&&!jobs.waiting;});
+  return {...context.api,requests,cancelRequests,statuses,fetches,writes,bitmaps,jpegCalls,seeds,deletions,store,database,clock,idle};
+}
+
+test('Groq engine sends one current window at a time, retaining current lecture priority',async()=>{
+  const first=deferred();
+  const fixture=engine({onTranscribe:(message,number)=>number===1?first.promise:undefined});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(()=>fixture.requests.length===1);
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.enqueue({contentId:lastId});
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.enqueue({contentId:id});
+  assert.deepEqual(Array.from((await fixture.handlers.jobs()).queued),[nextId,lastId]);
+  assert.deepEqual(fixture.requests.map(message=>message.offset),[0]);
+  assert.equal(fixture.fetches.length,1,'no next audio window is fetched while Groq is pending');
+  first.resolve({segments:[{start:0,end:1,text:'first'}]});
+  await fixture.idle();
+  assert.deepEqual(fixture.requests.map(message=>[message.contentId,message.offset]),
+    [id,nextId,lastId].flatMap(contentId=>[0,120,240].map(offset=>[contentId,offset])));
+  assert.equal((await fixture.store.get('lectures',id)).asrProvider,'groq');
+  assert.equal((await fixture.store.get('lectures',id)).asrModel,'whisper-large-v3-turbo');
+  assert.ok(fixture.bitmaps.every(frame=>frame.closed===1),'all streamed frame bitmaps are released exactly once');
 });
 
-test('ASR persistent quality errors keep their code without restarting the model recovery loop', async () => {
-  for (const code of ['ASR_REPETITION', 'ASR_GENERATION_LIMIT']) {
-    const events = [], replies = [];
-    const context = vm.createContext({
-      Float32Array, createModelProgress, console: { warn() {}, error() {} },
-      self: { postMessage: (msg) => replies.push(msg) },
-      loadAsr: async () => { events.push('load'); return { device: 'webgpu' }; },
-      releaseAsr: async () => { events.push('release'); },
-      transcribe: async () => { events.push('transcribe'); throw Object.assign(Error('persistent quality failure'), { code }); },
-    });
-    vm.runInContext(source('../extension/asr-worker.js'), context);
-    context.self.onmessage({ data: { id: 1, cmd: 'load', asrModel: 'base' } });
-    await until(() => replies.some((r) => r.id === 1 && r.ok));
-    context.self.onmessage({ data: { id: 2, cmd: 'transcribe', pcm: new Float32Array(1).buffer, offset: 0 } });
-    await until(() => replies.some((r) => r.id === 2));
-    assert.deepEqual(events, ['load', 'transcribe']);
-    const failed = replies.find((r) => r.id === 2);
-    assert.equal(failed.ok, false);assert.equal(failed.code, code);
-    assert.equal(replies.some((r) => r.diagnostic), false);
+test('cancelled pending media fetch releases the next queued lecture immediately',async()=>{
+  const blocked=deferred();
+  const fixture=engine({duration:120,onFetch:request=>request.contentId===id?blocked.promise:undefined});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(()=>fixture.fetches.length===1);
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.cancel({contentId:id});
+  await fixture.idle();
+  assert.equal(fixture.fetches[0].options.signal.aborted,true);
+  assert.deepEqual(fixture.requests.map(message=>message.contentId),[nextId]);
+  assert.equal((await fixture.store.get('lectures',id)).state,'paused');
+  blocked.resolve();await tick();
+  assert.ok(!fixture.writes.some(row=>row.name==='segments'&&row.contentId===id));
+});
+
+test('cancelled pending native transcription advances queue and ignores late success',async()=>{
+  const blocked=deferred();
+  const fixture=engine({duration:120,onTranscribe:message=>message.contentId===id?blocked.promise:undefined});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(()=>fixture.requests.length===1);
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.cancel({contentId:id});
+  await fixture.idle();
+  assert.deepEqual(fixture.cancelRequests,[id]);
+  assert.deepEqual(fixture.requests.map(message=>message.contentId),[id,nextId]);
+  assert.equal((await fixture.store.get('lectures',id)).state,'paused');
+  blocked.resolve({segments:[{start:0,end:1,text:'late transcript must be ignored'}]});
+  await tick();await tick();
+  assert.deepEqual(await fixture.store.byLecture('segments',id),[]);
+  assert.ok(!fixture.statuses.some(status=>status.contentId===id&&status.state==='done'));
+});
+
+test('late native failure after cancellation cannot hold or restart the queue',async()=>{
+  const blocked=deferred();
+  const fixture=engine({duration:120,onTranscribe:message=>message.contentId===id?blocked.promise:undefined});
+  await fixture.handlers.enqueue({contentId:id});await until(()=>fixture.requests.length===1);
+  await fixture.handlers.enqueue({contentId:nextId});await fixture.handlers.cancel({contentId:id});await fixture.idle();
+  blocked.reject(failure('GROQ_RATE_LIMIT',fixture.clock.now+5000));await tick();await tick();
+  const jobs=await fixture.handlers.jobs();
+  assert.equal(jobs.waiting,null);assert.deepEqual(Array.from(jobs.queued),[]);assert.equal(fixture.requests.length,2);
+});
+
+test('429 holds current lecture at queue front and sends no other lecture until the deadline',async()=>{
+  let attempts=0;
+  const fixture=engine({duration:120,onTranscribe:()=>{if(++attempts===1)throw failure('GROQ_RATE_LIMIT',fixture.clock.now+5000);}});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(async()=>{const jobs=await fixture.handlers.jobs();return jobs.waiting==='rate'&&!jobs.running;});
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.enqueue({contentId:lastId});
+  assert.deepEqual(Array.from((await fixture.handlers.jobs()).queued),[id,nextId,lastId]);
+  assert.equal(fixture.requests.length,1);
+  const manual=await fixture.handlers.resumeQueue();assert.equal(manual.waiting,true);
+  await fixture.clock.advance(4999);assert.equal(fixture.requests.length,1);
+  await fixture.clock.advance(1);await fixture.idle();
+  assert.deepEqual(fixture.requests.map(message=>message.contentId),[id,id,nextId,lastId]);
+  await fixture.clock.advance(10_000);assert.equal(fixture.requests.length,4,'deadline resumes exactly once');
+});
+
+test('auth and transient failures retain FIFO order until an explicit connection resume',async()=>{
+  for(const code of ['GROQ_AUTH','GROQ_TRANSIENT','GROQ_MODEL_UNAVAILABLE']){
+    let attempts=0;
+    const fixture=engine({duration:120,onTranscribe:()=>{if(++attempts===1)throw failure(code);}});
+    await fixture.handlers.enqueue({contentId:id});
+    await until(async()=>{const jobs=await fixture.handlers.jobs();return jobs.waiting==='connection'&&!jobs.running;});
+    await fixture.handlers.enqueue({contentId:nextId});
+    await fixture.clock.advance(24*60*60*1000);
+    assert.equal(fixture.requests.length,1,code+' never retries automatically');
+    assert.deepEqual(Array.from((await fixture.handlers.jobs()).queued),[id,nextId]);
+    await fixture.handlers.resumeQueue();await fixture.idle();
+    assert.deepEqual(fixture.requests.map(message=>message.contentId),[id,id,nextId]);
   }
+});
+
+test('quota resume starts at committed audio checkpoint and restores the pending slide',async()=>{
+  let calls=0;
+  const fixture=engine({onTranscribe:()=>{if(++calls===2)throw failure('GROQ_RATE_LIMIT',fixture.clock.now+5000);}});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(async()=>{const jobs=await fixture.handlers.jobs();return jobs.waiting==='rate'&&!jobs.running;});
+  assert.equal((await fixture.store.get('lectures',id)).progressSec,120);
+  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,row.pending]),[[0,120,true]]);
+  assert.equal((await fixture.store.byLecture('segments',id))[0].text,'fixture transcript');
+  await fixture.clock.advance(5000);await fixture.idle();
+  assert.deepEqual(fixture.requests.map(message=>message.offset),[0,120,120,240]);
+  assert.equal(fixture.requests.filter(message=>message.offset===0).length,1,'successful audio is not uploaded again');
+  assert.deepEqual(fixture.deletions.map(item=>item.from),[0,120]);
+  assert.equal(fixture.seeds.length,1);
+  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,!!row.pending]),[[0,120,false],[120,360,false]]);
+  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,120,240]);
+  assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
+});
+
+test('resume respects audio progress even when a completed slide ended earlier',async()=>{
+  const database=new Map([
+    ['lectures',new Map([[id,{contentId:id,title:'cached',duration:360,mediaUrl:id,state:'paused',progressSec:120}]])],
+    ['segments',new Map([[id+'/0',{contentId:id,start:0,end:1,text:'already transcribed'}],[id+'/60',{contentId:id,start:60,end:61,text:'keep this'}]])],
+    ['slides',new Map([[id+'/0',{contentId:id,start:0,end:30,blob:{screen:255}}],[id+'/30',{contentId:id,start:30,end:120,blob:{screen:0},pending:true}]])],
+  ]);
+  const fixture=engine({database});await fixture.handlers.enqueue({contentId:id});await fixture.idle();
+  assert.deepEqual(fixture.requests.map(message=>message.offset),[120,240]);
+  assert.deepEqual((await fixture.store.byLecture('segments',id)).map(row=>row.start),[0,60,120,240]);
+  assert.deepEqual((await fixture.store.byLecture('slides',id)).map(row=>[row.start,row.end,!!row.pending]),[[0,30,false],[30,120,false],[120,360,false]]);
+  assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
+});
+
+test('oversized compressed media windows shrink before remote transcription and retain continuous coverage',async()=>{
+  const fixture=engine({duration:120,onFetch:request=>{assert.equal(request.options.maxBytes,32*1024*1024);if(request.end-request.start>30)throw failure('PREFETCH_LIMIT');}});
+  await fixture.handlers.enqueue({contentId:id});await fixture.idle();
+  assert.deepEqual(fixture.fetches.slice(0,3).map(request=>[request.start,request.end]),[[0,120],[0,60],[0,30]]);
+  assert.ok(fixture.requests.every(message=>message.duration<=30));
+  let covered=0;
+  for(const request of fixture.requests){assert.equal(request.offset,covered);covered+=request.duration;}
+  assert.equal(covered,120);assert.equal((await fixture.store.get('lectures',id)).state,'done');
+  assert.ok(fixture.bitmaps.every(frame=>frame.closed===1));
+});
+
+test('decoder failures retain transcription and complete with an explicit missing-slide status',async()=>{
+  const fixture=engine({duration:120,onDecode:()=>{throw new Error('unsupported video fixture');}});
+  await fixture.handlers.enqueue({contentId:id});await fixture.idle();
+  assert.equal((await fixture.store.byLecture('segments',id)).length,1);
+  assert.equal((await fixture.store.get('lectures',id)).state,'done');
+  assert.match(fixture.statuses.findLast(status=>status.state==='done').step,/일부 구간 슬라이드 없음/);
+});
+
+test('removing a queued lecture preserves current request and cannot bypass the global quota hold',async()=>{
+  const fixture=engine({duration:120,onTranscribe:()=>{throw failure('GROQ_RATE_LIMIT',fixture.clock.now+5000);}});
+  await fixture.handlers.enqueue({contentId:id});
+  await until(async()=>{const jobs=await fixture.handlers.jobs();return jobs.waiting==='rate'&&!jobs.running;});
+  await fixture.handlers.enqueue({contentId:nextId});
+  await fixture.handlers.cancel({contentId:id});
+  assert.deepEqual(Array.from((await fixture.handlers.jobs()).queued),[nextId]);
+  assert.equal((await fixture.handlers.resumeQueue()).waiting,true);
+  await fixture.clock.advance(4999);assert.equal(fixture.requests.length,1);
+  await fixture.handlers.cancel({contentId:nextId});
+  const jobs=await fixture.handlers.jobs();assert.equal(jobs.waiting,null);assert.equal(jobs.retryAt,null);
+  await fixture.clock.advance(10_000);assert.equal(fixture.requests.length,1);
 });

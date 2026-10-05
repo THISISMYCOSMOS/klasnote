@@ -26,7 +26,7 @@
 
   <fieldset>
     <legend>처리 방식</legend>
-    <label class="row"><input type="radio" name="mode" value="local" checked /> 로컬 전용 (전송 없음)</label>
+    <label class="row"><input type="radio" name="mode" value="local" checked /> 원문만 (요약 AI 사용 안 함)</label>
     <label class="row"><input type="radio" name="mode" value="ai" /> AI 모드</label>
   </fieldset>
 
@@ -47,6 +47,8 @@
     <input type="checkbox" id="confirmBeforeSend" checked /> 전송 전 확인
   </label>
 
+  <p class="notice-line">받아쓰기는 강의 음성을 Groq로 전송합니다. 별도의 Groq Free 계정 API 키가 필요하며, 무료 한도를 넘으면 기다립니다.</p>
+  <label class="row"><input id="asrConsent" type="checkbox" /> Groq 음성 전송에 동의합니다.</label>
   <div class="actions-center">
     <button type="button" id="continueBtn" class="btn btn--primary">계속</button>
   </div>

@@ -12,7 +12,7 @@
 <div class="page">
   <header class="page-header">
     <h1>설정</h1>
-    <p class="page-header__sub">AI 모드일 때만 대본·슬라이드가 전송됩니다.</p>
+    <p class="page-header__sub">받아쓰기는 Groq, 선택한 강의의 요약은 내 Claude/Codex 계정을 사용합니다.</p>
   </header>
 
   <section id="campusHost" class="campus-host" aria-label="캠퍼스 장면"></section>
@@ -20,6 +20,16 @@
   <p id="connBanner" class="conn-banner" role="status" aria-live="polite">확인 중…</p>
 
   <main class="cards">
+    <section class="card" aria-labelledby="groq-h">
+      <h2 id="groq-h">Groq 받아쓰기</h2>
+      <p class="hint">노트북에서 음성 인식 모델을 실행하지 않습니다. 압축 음성을 Groq로 전송하며, 모델은 whisper-large-v3-turbo를 사용합니다.</p>
+      <p class="hint"><a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq Free 계정에서 API 키 발급</a> 후 아래에 저장하세요. 유료 플랜의 키는 비용이 발생할 수 있습니다.</p>
+      <div class="field-row"><label class="field-label" for="groqApiKey">API 키</label><input id="groqApiKey" type="password" autocomplete="off" spellcheck="false" maxlength="512" placeholder="키는 다시 표시되지 않습니다" /></div>
+      <label class="check"><input id="asrConsent" type="checkbox" /> 강의 음성을 Groq로 보내 받아쓰는 데 동의합니다.</label>
+      <div class="actions-row"><button id="saveGroqKey" class="btn btn--primary" type="button">키·동의 저장</button><button id="testGroq" class="btn btn--ghost" type="button">연결 테스트·대기 재개</button><button id="removeGroqKey" class="btn btn--ghost" type="button">키 삭제</button></div>
+      <p id="groqState" class="hint" role="status" aria-live="polite"></p>
+      <p class="hint">무료 한도는 조직별로 적용됩니다. 현재 공개 기본 한도는 음성 2시간/시간, 8시간/일이며 계정의 실제 한도가 우선합니다. 한도 초과 시 대기열을 유지하고 재개합니다. 연결 테스트는 모델 목록만 확인하며 음성을 전송하지 않습니다.</p>
+    </section>
     <section class="card" aria-labelledby="ai-h">
       <h2 id="ai-h">AI 연결</h2>
 
@@ -41,19 +51,20 @@
       </div>
 
       <details class="more-details">
-        <summary>세부 설정 (모델 · 상세도 · 받아쓰기)</summary>
+        <summary>세부 설정 (요약 모델 · 상세도)</summary>
         <div class="field-row">
           <label class="field-label" for="claudeModel">Claude 모델</label>
           <select id="claudeModel">
             <option value="haiku">Haiku (빠름)</option>
-            <option value="sonnet">Sonnet (기본)</option>
+            <option value="claude-opus-5-5">Opus 5.5 (기본)</option>
+            <option value="sonnet">Sonnet</option>
             <option value="opus">Opus (고품질)</option>
           </select>
         </div>
         <div class="field-row">
           <label class="field-label" for="codexModel">Codex 모델</label>
           <select id="codexModel">
-            <option value="gpt-5.6-terra">GPT-5.6-Terra (기본)</option>
+            <option value="gpt-6-sol">GPT-6-Sol (기본)</option>
           </select>
         </div>
         <p class="hint" id="codexModelHint">목록은 이 PC의 Codex에서 불러와요. ChatGPT 계정에서 안 되는 모델은 요약할 때 안내가 떠요(사용량 차감 없음).</p>
@@ -63,13 +74,6 @@
             <option value="save">절약 — 최대 10장</option>
             <option value="standard">표준 — 최대 25장</option>
             <option value="detail">상세 — 최대 60장</option>
-          </select>
-        </div>
-        <div class="field-row">
-          <label class="field-label" for="asrModel">받아쓰기 모델</label>
-          <select id="asrModel">
-            <option value="base">base (권장 · 메모리 절약)</option>
-            <option value="small">small (정확도 우선 · 메모리 더 사용)</option>
           </select>
         </div>
         <div class="field-row">
@@ -90,7 +94,7 @@
       <h2 id="privacy-h">개인정보</h2>
       <p id="consentState" class="hint"></p>
       <ul class="privacy-list privacy-list--compact">
-        <li><strong>로컬 전용</strong>: 이 PC에서 받아쓰기·HTML 생성. AI 전송 없음.</li>
+        <li><strong>원문만</strong>: Groq 받아쓰기와 로컬 HTML 생성. 요약 AI 호출 없음.</li>
         <li><strong>AI 모드</strong>: 대본·선택 슬라이드를 내 Claude/Codex 계정으로 전송하며 내 사용량을 씁니다.</li>
       </ul>
       <details class="more-details">
