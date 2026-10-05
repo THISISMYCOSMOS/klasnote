@@ -86,7 +86,7 @@ function parseCorrections(list){
     if(!x.from.trim()||x.from.length>40||!x.to.trim()||x.to.length>80||x.from===x.to)continue;
     if(s!==undefined&&(!Number.isInteger(s)||s<1))continue;
     out.push(s===undefined?{id,from:x.from,to:x.to}:{id,from:x.from,to:x.to,s});
-    if(out.length===40)break;
+    if(out.length===80)break;
   }
   return out;
 }

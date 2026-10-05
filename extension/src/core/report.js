@@ -75,7 +75,7 @@ async function blobToDataUrl(blob) {
 export async function buildReport({ lecture, groups, summary, meta }) {
   const noteUrl = /^[a-p]{32}$/.test(meta.extensionId ?? '') && /^[0-9a-f]{8,32}$/i.test(lecture.contentId ?? '')
     ? `chrome-extension://${meta.extensionId}/note-launch.html?id=${lecture.contentId.toLowerCase()}` : null;
-  const corrections = correctionsBySegment((summary?.corrections ?? []).slice(0, 60), groups.length);
+  const corrections = correctionsBySegment((summary?.corrections ?? []).slice(0, 80), groups.length);
   const scriptHash = await sha256b64(VIEW_SCRIPT);
   const cards = [];
   // 의심 구간 판정은 앞뒤 발화를 봐야 하므로 슬라이드 순서대로 이은 전체 발화에 대해 한 번 계산한다.

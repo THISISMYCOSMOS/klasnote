@@ -16,7 +16,8 @@ export function suspectReasons(segs) {
     prev = norm;
     // 숫자 이중 확인(numcheck.js)에서 원래 숫자가 다시 나오지 않은 발화. 어느 쪽이 맞는지는 판단하지 않는다.
     if (s.numberCheck) return `숫자 재확인 결과가 다름 (다시 받아쓴 결과: ${String(s.numberCheck).slice(0, 80)})`;
-    if (chars && !(dur > 0 && chars / dur <= MAX_CHARS_PER_SEC)) return '말한 시간에 비해 글자가 너무 많음';
+    // '그렇죠.' 같은 짧은 말은 시각이 눌려도 해가 없어 6자 이상만 본다(실측: 짧은 맞장구 2건이 표시됐다).
+    if (chars >= 6 && !(dur > 0 && chars / dur <= MAX_CHARS_PER_SEC)) return '말한 시간에 비해 글자가 너무 많음';
     if (SILENCE_PHRASES.some((re) => re.test(text))) return '무음에서 자주 생기는 문구';
     if (REPEATED.test(text) || run >= 3) return '같은 말 반복';
     return null;

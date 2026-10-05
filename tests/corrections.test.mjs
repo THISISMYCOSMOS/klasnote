@@ -44,8 +44,9 @@ test('summary parser keeps per-utterance corrections and drops the old global pa
     { id: 0, from: 'a', to: 'b' }, { id: 6, from: 'x'.repeat(41), to: 'y' }, { id: 7, from: '같음', to: '같음' }, { id: 8, from: 'a', to: 'b', s: 1.5 },
   ] }));
   assert.deepEqual(parsed.corrections, [{ id: 4, from: '교환', to: '교안', s: 2 }, { id: 5, from: '묵자', to: '목차' }]);
-  const many = parseSummary(JSON.stringify({ ...base, corrections: Array.from({ length: 50 }, (_, i) => ({ id: i + 1, from: 'a', to: 'b' })) }));
-  assert.equal(many.corrections.length, 40);
+  // A real 55-minute lecture used all 40 slots, so the cap is 80.
+  const many = parseSummary(JSON.stringify({ ...base, corrections: Array.from({ length: 90 }, (_, i) => ({ id: i + 1, from: 'a', to: 'b' })) }));
+  assert.equal(many.corrections.length, 80);
 });
 
 test('AI input numbers utterances the same way the report does, skipping empty lines', async () => {

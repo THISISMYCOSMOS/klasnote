@@ -14,8 +14,9 @@ test('real Groq hallucinations are flagged while real fast speech is not', () =>
     seg(10, 12.18, 'Probabilistic Perspective 라고 써있죠.'),
     seg(13.4, 15, '전체 내용은 다음과 같습니다.'),
     seg(59.9, 73.5, '자체적인 기준으로 해서 성적을 비교하기보다는'),
+    seg(100, 100.1, '그렇죠.'),
   ]);
-  assert.deepEqual(reasons, ['말한 시간에 비해 글자가 너무 많음', '무음에서 자주 생기는 문구', '무음에서 자주 생기는 문구', null, null, null]);
+  assert.deepEqual(reasons, ['말한 시간에 비해 글자가 너무 많음', '무음에서 자주 생기는 문구', '무음에서 자주 생기는 문구', null, null, null, null]);
 });
 
 test('a closing thanks inside a real sentence is not flagged', () => {
