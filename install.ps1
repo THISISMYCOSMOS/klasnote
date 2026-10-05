@@ -18,6 +18,8 @@ if (Test-Path -LiteralPath $registryPath) {
 if ($nodePath.Contains('%') -or $installRoot.Contains('%') -or $nodePath.Contains('"') -or $installRoot.Contains('"')) { throw '지원하지 않는 경로 문자' }
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'native-host\host.mjs') -Destination (Join-Path $installRoot 'host.mjs') -Force
+# host.mjs가 ./groq.mjs를 불러오므로 함께 복사한다(누락 시 호스트가 시작되지 않는다).
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'native-host\groq.mjs') -Destination (Join-Path $installRoot 'groq.mjs') -Force
 $launcherPath = Join-Path $installRoot 'host.bat'
 $launcher = '@echo off' + "`r`n" + '"' + $nodePath + '" "' + (Join-Path $installRoot 'host.mjs') + '"' + "`r`n"
 [IO.File]::WriteAllText($launcherPath, $launcher, [Text.Encoding]::Default)
