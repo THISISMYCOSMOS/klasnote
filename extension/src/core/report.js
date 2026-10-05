@@ -4,27 +4,37 @@ import { mmss } from './pack.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// 교정은 원문(이스케이프 전)에 한 번에 적용하고, 조각마다 따로 이스케이프한다.
-// 순차 치환은 앞서 넣은 태그 속성 안을 다시 치환해 HTML 주입이 가능했다(레드팀 R2, 실증됨).
-function correctionMatcher(corrections) {
+// 교정은 AI가 지목한 발화(#번호, pack.js와 같은 순번) 안에서만 적용한다. 강의 전체 치환은 같은 말이
+// 맞게 쓰인 다른 문장까지 바꿨다. 발화 안에서 원문 표현이 정확히 한 번 나올 때만 적용하고, 겹치거나
+// 존재하지 않는 슬라이드를 근거로 든 교정은 버린다. 원문(이스케이프 전)에 적용한 뒤 조각마다 이스케이프한다
+// (태그 속성 안 재치환에 의한 HTML 주입 방지, 레드팀 R2).
+function correctionsBySegment(corrections, slideCount) {
   const map = new Map();
   for (const c of corrections) {
-    const [wrong, right] = c.map((x) => String(x ?? ''));
-    if (wrong.trim().length < 1 || wrong.length > 40 || !right || right.length > 80 || wrong === right) continue;
-    if (!map.has(wrong)) map.set(wrong, right);
+    if (!c || !Number.isInteger(c.id) || typeof c.from !== 'string' || typeof c.to !== 'string') continue;
+    if (!c.from.trim() || c.from.length > 40 || !c.to.trim() || c.to.length > 80 || c.from === c.to) continue;
+    if (c.s !== undefined && !(Number.isInteger(c.s) && c.s >= 1 && c.s <= slideCount)) continue;
+    if (!map.has(c.id)) map.set(c.id, []);
+    map.get(c.id).push(c);
   }
-  if (!map.size) return null;
-  const keys = [...map.keys()].sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return { re: new RegExp(keys.join('|'), 'g'), map };
+  return map;
 }
 
-function applyCorrections(text, matcher) {
-  if (!matcher) return esc(text);
+function renderSegment(text, list = []) {
+  const hits = [];
+  for (const c of list) {
+    const at = text.indexOf(c.from);
+    if (at < 0 || text.indexOf(c.from, at + 1) >= 0) continue;
+    const end = at + c.from.length;
+    if (hits.some((h) => at < h.end && end > h.at)) continue;
+    hits.push({ at, end, c });
+  }
+  hits.sort((a, b) => a.at - b.at);
   let out = '', last = 0;
-  for (const m of text.matchAll(matcher.re)) {
-    out += esc(text.slice(last, m.index));
-    out += `<mark title="받아쓰기 원래: ${esc(m[0])}">${esc(matcher.map.get(m[0]))}</mark>`;
-    last = m.index + m[0].length;
+  for (const { at, end, c } of hits) {
+    const why = `받아쓰기 원래: ${c.from}${c.s ? ` · 근거 S${c.s}` : ''}`;
+    out += esc(text.slice(last, at)) + `<mark title="${esc(why)}">${esc(c.to)}</mark>`;
+    last = end;
   }
   return out + esc(text.slice(last));
 }
@@ -45,8 +55,8 @@ export function toParagraphs(segs, { gap = 1.5, maxChars = 220 } = {}) {
     const text = s.text.trim();
     if (!text) continue;
     const breakHere = !cur || s.start - cur.end > gap || (cur.text.length > maxChars && /[.?!요죠다]$/.test(cur.text));
-    if (breakHere) { cur = { start: s.start, end: s.end, text }; paras.push(cur); }
-    else { cur.text += ' ' + text; cur.end = s.end; }
+    if (breakHere) { cur = { start: s.start, end: s.end, text, segs: [s] }; paras.push(cur); }
+    else { cur.text += ' ' + text; cur.end = s.end; cur.segs.push(s); }
   }
   return paras;
 }
@@ -62,12 +72,14 @@ async function blobToDataUrl(blob) {
 export async function buildReport({ lecture, groups, summary, meta }) {
   const noteUrl = /^[a-p]{32}$/.test(meta.extensionId ?? '') && /^[0-9a-f]{8,32}$/i.test(lecture.contentId ?? '')
     ? `chrome-extension://${meta.extensionId}/note-launch.html?id=${lecture.contentId.toLowerCase()}` : null;
-  const corrections = correctionMatcher((summary?.corrections ?? []).filter((c) => Array.isArray(c) && c.length === 2).slice(0, 60));
+  const corrections = correctionsBySegment((summary?.corrections ?? []).slice(0, 60), groups.length);
   const scriptHash = await sha256b64(VIEW_SCRIPT);
   const cards = [];
+  let n = 0;
   for (const [i, g] of groups.entries()) {
     const img = g.blob ? `<img loading="lazy" src="${await blobToDataUrl(g.blob)}" alt="슬라이드 ${i + 1}">` : '';
-    const verbatim = toParagraphs(g.segs).map((x) => `<p><time>${mmss(x.start)}</time> ${applyCorrections(x.text, corrections)}</p>`).join('');
+    const segs = g.segs.map((s) => ({ ...s, n: ++n }));
+    const verbatim = toParagraphs(segs).map((x) => `<p><time>${mmss(x.start)}</time> ${x.segs.map((s) => renderSegment(s.text.trim(), corrections.get(s.n))).join(' ')}</p>`).join('');
     cards.push(`<section class="card" id="s${i + 1}">
 <header><b>S${i + 1}</b> <time>${mmss(g.start)} – ${mmss(g.end)}</time></header>
 <div class="body"><div class="img">${img}</div><div class="text">

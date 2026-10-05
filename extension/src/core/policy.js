@@ -74,7 +74,21 @@ export function parseSummary(raw) {
     seen.add(s);
     slides.push({s,summary:summary.filter(v=>typeof v==='string'),comment:typeof row.comment==='string'?row.comment:''});
   }
-  return {overview:text(parsed.overview),slides,exam:parsed.exam.filter(v=>typeof v==="string"),corrections:(Array.isArray(parsed.corrections)?parsed.corrections:[]).filter(x=>Array.isArray(x)&&x.length===2&&x.every(y=>typeof y==='string')&&x[0].length<=40&&x[1].length<=80).slice(0,40)};
+  return {overview:text(parsed.overview),slides,exam:parsed.exam.filter(v=>typeof v==="string"),corrections:parseCorrections(parsed.corrections)};
+}
+// 발화 단위 교정 {id,from,to,s?}. 형식이 어긋난 항목만 건너뛴다. 원문 일치는 report.js가 발화별로 확인한다.
+function parseCorrections(list){
+  const out=[];
+  for(const x of Array.isArray(list)?list:[]){
+    if(!x||typeof x!=='object'||Array.isArray(x))continue;
+    const id=Number(x.id),s=x.s===undefined||x.s===null?undefined:Number(x.s);
+    if(!Number.isInteger(id)||id<1||typeof x.from!=='string'||typeof x.to!=='string')continue;
+    if(!x.from.trim()||x.from.length>40||!x.to.trim()||x.to.length>80||x.from===x.to)continue;
+    if(s!==undefined&&(!Number.isInteger(s)||s<1))continue;
+    out.push(s===undefined?{id,from:x.from,to:x.to}:{id,from:x.from,to:x.to,s});
+    if(out.length===40)break;
+  }
+  return out;
 }
 export function checkPayload(payload) {
   const bytes=new TextEncoder().encode(JSON.stringify(payload)).byteLength;
