@@ -14,6 +14,7 @@ function inspectTree(file){
   if(stat.isSymbolicLink())throw Error('심볼릭 링크를 포함한 설치 폴더는 지원하지 않습니다.');
   if(stat.isDirectory())for(const name of fs.readdirSync(file))inspectTree(path.join(file,name));
 }
+export const toCrlf=text=>text.replace(/\r?\n/g,'\r\n');
 export function checkSource(root=source){
   for(const file of required)if(!fs.existsSync(path.join(root,file)))throw Error(`설치 파일 누락: ${file}. 설치 ZIP을 다시 풀어주세요.`);
   inspectTree(path.join(root,'extension'));inspectTree(path.join(root,'native-host'));

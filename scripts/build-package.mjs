@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkSource } from './setup.mjs';
+import { checkSource, toCrlf } from './setup.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = checkSource(root); // 필수 파일(vendor 포함)이 없으면 여기서 멈춘다
@@ -18,6 +18,12 @@ for (const item of include) {
   const from = path.join(root, item);
   if (!fs.existsSync(from)) throw Error(`누락: ${item}`);
   fs.cpSync(from, path.join(stage, item), { recursive: true });
+}
+// cmd.exe는 LF만 있는 배치 파일의 한글 줄을 잘못 끊어 읽어 설치 단계를 건너뛴다. 어느 OS에서 빌드해도 CRLF로 넣는다.
+for (const name of fs.readdirSync(stage, { recursive: true })) {
+  if (!/\.(cmd|bat)$/i.test(name)) continue;
+  const file = path.join(stage, name);
+  fs.writeFileSync(file, toCrlf(fs.readFileSync(file, 'utf8')));
 }
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.rmSync(out, { force: true });

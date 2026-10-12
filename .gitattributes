@@ -1,2 +1,6 @@
 *.command text eol=lf
 *.sh text eol=lf
+# cmd.exe misreads LF-only batch files with Korean text after chcp 65001: it runs
+# fragments of lines as commands and skips the installer. Keep CRLF bytes as-is.
+*.cmd -text
+*.bat -text
