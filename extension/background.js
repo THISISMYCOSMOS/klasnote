@@ -88,6 +88,14 @@ async function download(id){
   const downloadId=await chrome.downloads.download({url:r.url,filename:`KLAS요약/${course}/${prefix}${title}.html`,conflictAction:'uniquify',saveAs:false});
   return {downloadId};
 }
+// 목록의 'HTML 받기'로 원문을 받은 '확인 필요' 강의는 저장된 것으로 보고 확인 필요에서 뺀다(요약은 계속 가능).
+const READY=new Set(['done','awaiting_confirmation']);
+const needsReview=st=>READY.has(st?.state)&&st?.rawSaved!==true;
+async function downloadFromList(id){
+  const r=await download(id);
+  await mutate(s=>{const st=s.statuses[id];if(READY.has(st?.state))s.statuses[id]={...st,rawSaved:true,updatedAt:Date.now()};});
+  return r;
+}
 async function enqueue(id,{auto=false,force=false}={}){
   const s=await allowed(id);deleted.delete(id);
   if(s.statuses[id]?.state==='summarizing')throw new Error('현재 AI 요약 중입니다.');
@@ -181,7 +189,7 @@ const uiHandlers={
   async getLibrary(){const [items,summaries]=await Promise.all([store.allLectures(),store.allSummaries()]);return {items,summaries:Object.fromEntries(summaries.map(x=>[x.contentId,{createdAt:x.createdAt,aiLabel:x.aiLabel}]))};},
   async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}asrJobs.get(id)?.abort();const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
-  download:m=>download(requiredId(m.contentId)),
+  download:m=>downloadFromList(requiredId(m.contentId)),
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),
   prepareNote:m=>prepare(requiredId(m.contentId),false,{note:true}),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
@@ -198,7 +206,7 @@ export async function route(m,sender){
       const s=await state(),counts={active:0,ready:0,error:0};
       for(const status of Object.values(s.statuses)){
         if(['queued','running','summarizing'].includes(status.state))counts.active++;
-        else if(['done','awaiting_confirmation'].includes(status.state))counts.ready++;
+        else if(needsReview(status))counts.ready++;
         else if(status.state==='error')counts.error++;
       }
       return {consent:s.settings.consent,counts};
@@ -229,7 +237,7 @@ export async function route(m,sender){
     if(p.progress!==undefined)p.progress=Math.max(0,Math.min(1,Number(p.progress)||0));
     if(p.title)p.title=String(p.title).slice(0,200);if(p.step)p.step=String(p.step).slice(0,500);
     // 받아쓰기 완료 여부를 남겨, 이후 요약이 실패해도 원문 HTML을 받을 수 있게 한다.
-    if(p.state==='done')p.transcribed=true;else if(p.state==='running')p.transcribed=false;
+    if(p.state==='done')p.transcribed=true;else if(p.state==='running'){p.transcribed=false;p.rawSaved=false;}
     await patch(id,p);if(p.state==='done')afterTranscription(id).catch(e=>patch(id,{state:'error',error:String(e.message||e),intent:null}));return {};
   }
   if(role==='ui'){
@@ -261,7 +269,7 @@ export async function route(m,sender){
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
     if(m.type==='startProcessing')return startProcessing(id);
     // 목록의 'HTML 받기': 받아쓰기가 끝난 강의를 저장된 결과로 만든다(AI 호출 없음). 요약 전이면 원문만 담긴다.
-    if(m.type==='download'){const s=await state();if(!canDownload(s.statuses[id]))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return download(id);}
+    if(m.type==='download'){const s=await state();if(!canDownload(s.statuses[id]))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return downloadFromList(id);}
     throw new Error('목록에서 허용되지 않은 요청');
   }
   if(role==='player'){

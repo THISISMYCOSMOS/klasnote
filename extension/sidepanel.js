@@ -17,6 +17,9 @@ const STATUS_LABEL = {
 const PROGRESS_STATES = new Set(['queued', 'running']);
 const OPENED_LABEL = '요약 전 (열람됨)';
 const UNKNOWN_LABEL = '상태 확인 필요';
+const RAW_SAVED_LABEL = 'HTML 저장됨';
+// 'HTML 받기'로 원문을 이미 받은 강의는 확인 필요로 띄우지 않고 완료 쪽(아래)으로 보낸다.
+const rawSaved = (s) => ['awaiting_confirmation', 'done'].includes(s?.state) && s?.rawSaved === true;
 
 function hasRuntime() {
   return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id;
@@ -66,7 +69,7 @@ function modeLabel(settings) {
 function mascotStateFor(statuses) {
   const vals = Object.values(statuses || {});
   if (vals.some((s) => ['running', 'queued', 'summarizing'].includes(s?.state))) return 'walk';
-  if (vals.some((s) => ['awaiting_confirmation', 'done'].includes(s?.state))) return 'study';
+  if (vals.some((s) => ['awaiting_confirmation', 'done'].includes(s?.state) && !rawSaved(s))) return 'study';
   if (vals.some((s) => s?.state === 'complete')) return 'success';
   return 'idle';
 }
@@ -119,8 +122,9 @@ function buildItem(contentId, status, metadata, opened) {
   const badge = document.createElement('span');
   badge.className = 'status-badge';
   const state = status?.state;
-  badge.dataset.s = state || 'opened';
-  badge.textContent = state ? (STATUS_LABEL[state] || UNKNOWN_LABEL) : opened?OPENED_LABEL:'열람 전';
+  const saved = rawSaved(status);
+  badge.dataset.s = saved ? 'complete' : state || 'opened';
+  badge.textContent = saved ? RAW_SAVED_LABEL : state ? (STATUS_LABEL[state] || UNKNOWN_LABEL) : opened?OPENED_LABEL:'열람 전';
   row.appendChild(badge);
 
   const progress = status ? clampProgress(status.progress) : null;
@@ -270,7 +274,8 @@ async function refresh() {
   const metadata = res.metadata || {};
   const ids = Array.from(new Set([...Object.keys(statuses), ...Object.keys(opened)]));
   const priority={running:0,summarizing:0,queued:0,awaiting_confirmation:1,done:1,error:2,paused:2,complete:3};
-  ids.sort((a,b)=>(priority[statuses[a]?.state]??4)-(priority[statuses[b]?.state]??4)||(statuses[b]?.updatedAt??opened[b]??0)-(statuses[a]?.updatedAt??opened[a]??0));
+  const rank=id=>rawSaved(statuses[id])?priority.complete:(priority[statuses[id]?.state]??4);
+  ids.sort((a,b)=>rank(a)-rank(b)||(statuses[b]?.updatedAt??opened[b]??0)-(statuses[a]?.updatedAt??opened[a]??0));
 
   const list = el('lectureList');
   list.replaceChildren();

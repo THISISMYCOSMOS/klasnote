@@ -8,7 +8,7 @@
     for(const [id,view] of controls){
       const status=current.statuses?.[id]??{},opened=!!current.opened?.[id];
       view.toggle.checked=!!status.auto;view.toggle.setAttribute('aria-label',`${view.title} 자동 처리`);
-      const ready=['done','awaiting_confirmation'].includes(status.state);
+      const ready=['done','awaiting_confirmation'].includes(status.state);const saved=ready&&status.rawSaved===true;
       view.button.textContent=ready?'확인하고 저장':'지금 요약';
       view.button.disabled=!opened;view.button.title=!opened?'강의를 한 번 열어 본 뒤 요약할 수 있습니다.':ready?'처리가 끝났어요. 확인 화면에서 저장합니다.':'로컬 처리 후 확장 화면에서 전송량을 확인합니다.';
       // 요약 전이어도 받아쓰기가 끝났으면 원문 HTML을 받을 수 있다.
@@ -17,7 +17,7 @@
       const step=status.error||status.step||(opened?'개인 복습용':'한 번 열어야 요약 가능');
       if(view.status.textContent!==String(step).slice(0,200))view.status.textContent=String(step).slice(0,200);
       const pct=Math.round((Number(status.progress)||0)*100);
-      const BADGE={complete:['✓ 처리 완료','ok'],done:['확인 필요','warn'],awaiting_confirmation:['확인 필요','warn'],running:[`처리 중 ${pct}%`,'busy'],queued:['대기 중','busy'],summarizing:['AI 요약 중','busy'],paused:['일시정지','idle'],error:['오류','err']}[status.state];
+      const BADGE={complete:['✓ 처리 완료','ok'],saved:['✓ HTML 저장됨','ok'],done:['확인 필요','warn'],awaiting_confirmation:['확인 필요','warn'],running:[`처리 중 ${pct}%`,'busy'],queued:['대기 중','busy'],summarizing:['AI 요약 중','busy'],paused:['일시정지','idle'],error:['오류','err']}[saved?'saved':status.state];
       view.badge.hidden=!BADGE;if(BADGE){view.badge.textContent=BADGE[0];view.badge.dataset.kind=BADGE[1];}
       view.progress.hidden=!['queued','running','summarizing'].includes(status.state);
       view.progress.value=Number(status.progress)||0;
