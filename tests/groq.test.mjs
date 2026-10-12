@@ -63,15 +63,26 @@ test('nonempty transcript never gets fabricated timings when segments are absent
   }
 });
 
-test('bad or materially out-of-range timestamps reject', async () => {
+test('bad timestamps reject with timing-only diagnostics', async () => {
   for (const segment of [
-    { start: -1, end: 1 }, { start: 0, end: 61 }, { start: 1, end: 1 },
-    { start: 2, end: 1 }, { start: '0', end: 1 }, { start: 0, end: '1' },
+    { start: -1, end: 1 }, { start: 2, end: 1 }, { start: '0', end: 1 }, { start: 0, end: '1' },
     { start: null, end: 1 }, { start: 0, end: null }, { end: 1 },
-  ]) await assert.rejects(run({ segments: [{ ...segment, text: 'bad' }] }), codeIs('GROQ_RESPONSE'));
+  ]) await assert.rejects(run({ segments: [{ ...segment, text: 'bad secret text' }] }), (error) =>
+    codeIs('GROQ_RESPONSE')(error) && error.message.includes('오디오 60.00초') && !error.message.includes('secret'));
   await assert.rejects(run({ segments: [{ start: 5, end: 10, text: 'first' }, { start: 4, end: 12, text: 'backwards' }] }), codeIs('GROQ_RESPONSE'));
-  await assert.rejects(run({ segments: [{ start: 5, end: 10, text: 'first' }, { start: 6, end: 9, text: 'backwards end' }] }), codeIs('GROQ_RESPONSE'));
   await assert.rejects(run(payload, { offset: 1e17 }), codeIs('GROQ_RESPONSE'));
+});
+
+test('Whisper padding artifacts are clamped or dropped instead of failing the lecture', async () => {
+  // End past the audio (chunk cut mid-sentence), zero-length, nested end, and a tail hallucination in padding.
+  assert.deepEqual((await run({ text: 'a b c d e', segments: [
+    { start: 0, end: 5, text: 'a' }, { start: 5, end: 5, text: 'b' }, { start: 6, end: 9, text: 'c' },
+    { start: 7, end: 8, text: 'd' }, { start: 58, end: 64.5, text: 'e' }, { start: 60, end: 90, text: 'padding' },
+  ] })).segments, [
+    { start: 120, end: 125, text: 'a' }, { start: 125, end: 125.02, text: 'b' }, { start: 126, end: 129, text: 'c' },
+    { start: 127, end: 128, text: 'd' }, { start: 178, end: 180, text: 'e' },
+  ]);
+  assert.deepEqual((await run({ text: 'padding', segments: [{ start: 61, end: 70, text: 'padding' }] })).segments, []);
 });
 
 test('invalid input is rejected before provider invocation', async () => {
@@ -109,7 +120,8 @@ test('large audio checks encoded and decoded bounds without automatic splitting'
 test('AAC edge tolerance allows 120.03 seconds without stretching returned timestamps', async () => {
   assert.deepEqual((await run({ segments: [{ start: 0, end: 120.03, text: 'edge' }] }, { duration: 120.03 })).segments,
     [{ start: 120, end: 240.03, text: 'edge' }]);
-  await assert.rejects(run({ segments: [{ start: 0, end: 120.051, text: 'outside' }] }, { duration: 120.03 }), codeIs('GROQ_RESPONSE'));
+  assert.deepEqual((await run({ segments: [{ start: 0, end: 120.051, text: 'outside' }] }, { duration: 120.03 })).segments,
+    [{ start: 120, end: 240.03, text: 'outside' }]);
 });
 
 test('captured Groq verbose_json timestamps clamp final rounded tick to actual AAC duration', async () => {
@@ -132,20 +144,17 @@ test('captured Groq verbose_json timestamps clamp final rounded tick to actual A
   assert.equal(output.segments.at(-1).end, args.offset + duration);
 });
 
-test('only end timestamps within one 20ms tick may be clamped; ordering and starts stay strict', async () => {
+test('end ticks past the audio clamp to the AAC duration; negative starts and backwards starts stay strict', async () => {
   const duration = 29.976961451247167;
-  assert.deepEqual((await run({ segments: [{ start: 29, end: duration + 0.020, text: 'tick' }] }, { duration })).segments,
-    [{ start: 149, end: 120 + duration, text: 'tick' }]);
-  for (const segment of [
-    { start: 29, end: duration + 0.020001 },
-    { start: duration, end: duration + 0.01 },
-    { start: duration + 0.001, end: duration + 0.01 },
-    { start: -0.001, end: 1 },
-  ]) await assert.rejects(run({ segments: [{ ...segment, text: 'bad' }] }, { duration }), codeIs('GROQ_RESPONSE'));
-  // Clamping must not hide backwards provider ends, even when both end ticks exceed the boundary.
+  for (const end of [duration + 0.020, duration + 0.020001, duration + 3]) {
+    assert.deepEqual((await run({ segments: [{ start: 29, end, text: 'tick' }] }, { duration })).segments,
+      [{ start: 149, end: 120 + duration, text: 'tick' }]);
+  }
+  assert.deepEqual((await run({ segments: [{ start: duration, end: duration + 0.01, text: 'pad' }] }, { duration })).segments, []);
+  await assert.rejects(run({ segments: [{ start: -0.001, end: 1, text: 'bad' }] }, { duration }), codeIs('GROQ_RESPONSE'));
   await assert.rejects(run({ segments: [
     { start: 28, end: duration + 0.02, text: 'first' },
-    { start: 29, end: duration + 0.01, text: 'backwards end' },
+    { start: 27, end: duration + 0.01, text: 'backwards start' },
   ] }, { duration }), codeIs('GROQ_RESPONSE'));
 });
 

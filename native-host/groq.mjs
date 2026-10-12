@@ -126,7 +126,7 @@ function parseSegments(result, offset, duration) {
     failure('GROQ_RESPONSE', 'Groq 전사 응답에 구간별 시간이 없습니다.');
   }
   const segments = [];
-  let lastStart = -1, lastEnd = -1;
+  let lastStart = -1, padding = false;
   for (const segment of result.segments) {
     if (!segment || typeof segment !== 'object' || Array.isArray(segment) || typeof segment.text !== 'string') {
       failure('GROQ_RESPONSE', 'Groq 전사 구간 형식이 잘못되었습니다.');
@@ -134,19 +134,24 @@ function parseSegments(result, offset, duration) {
     // Silence is the only segment that may be discarded.
     if (!segment.text.trim()) continue;
     const { start, end } = segment;
-    // Whisper timestamps use 20ms ticks; an end tick can round beyond the final AAC sample.
-    const normalizedEnd = Math.min(end, duration);
     if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) ||
-        start < 0 || start >= duration || end <= start || end > duration + END_TIMESTAMP_TICK_SECONDS ||
-        normalizedEnd <= start || start < lastStart || end < lastEnd ||
-        !Number.isFinite(offset + start) || !Number.isFinite(offset + normalizedEnd) || offset + normalizedEnd <= offset + start) {
+        start < 0 || end < start || start < lastStart) {
+      // Timing numbers only (never transcript text) so a real failure can be diagnosed from the UI.
+      const n = (value) => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : String(typeof value);
+      failure('GROQ_RESPONSE', `Groq 전사 구간 시간이 오디오 범위를 벗어났거나 잘못되었습니다. (${n(start)}~${n(end)}초 / 오디오 ${n(duration)}초)`);
+    }
+    // Whisper decodes 30s windows padded with silence. A segment starting at/after the real audio end
+    // has no audio behind it (padding hallucination); an end may also run into the padding when the
+    // chunk cuts mid-sentence, or equal its start. Keep the text and clamp the end into the audio.
+    if (start >= duration) { padding = true; continue; }
+    const normalizedEnd = Math.min(Math.max(end, start + END_TIMESTAMP_TICK_SECONDS), duration);
+    if (!Number.isFinite(offset + normalizedEnd) || offset + normalizedEnd <= offset + start) {
       failure('GROQ_RESPONSE', 'Groq 전사 구간 시간이 오디오 범위를 벗어났거나 잘못되었습니다.');
     }
     segments.push({ start: offset + start, end: offset + normalizedEnd, text: segment.text.trim() });
     lastStart = start;
-    lastEnd = end;
   }
-  if (!segments.length && result.text?.trim()) failure('GROQ_RESPONSE', 'Groq 전사 텍스트에 대응하는 구간별 시간이 없습니다.');
+  if (!segments.length && !padding && result.text?.trim()) failure('GROQ_RESPONSE', 'Groq 전사 텍스트에 대응하는 구간별 시간이 없습니다.');
   return segments;
 }
 
