@@ -4,6 +4,7 @@
   const root=host.attachShadow({mode:'closed'}),style=document.createElement('style');
   style.textContent=':host{display:inline-block;margin:4px 8px;font:12px system-ui}:host([data-floating]){position:fixed;right:16px;bottom:16px;margin:0;z-index:1000}:host([data-moved]){position:fixed;right:auto;bottom:auto;margin:0;z-index:1000}button{font:inherit;display:inline-flex;align-items:center;gap:6px;border:1px solid #80525d;border-radius:6px;background:#fff;color:#633242;padding:5px 9px;cursor:grab;max-width:250px;touch-action:none;user-select:none}:host([data-dragging]) button{cursor:grabbing;box-shadow:0 4px 14px rgba(0,0,0,.18)}.dot{width:6px;height:6px;border-radius:50%;background:#999;flex:none}.dot[data-active]{background:#9b3450}.grip{color:#b08a94;letter-spacing:-2px;margin-right:2px}button:focus-visible{outline:2px solid #9b3450;outline-offset:2px}';
   const button=document.createElement('button');button.type='button';button.title='클릭: 요약 상태와 사용방법 열기 · 끌기: 위치 옮기기';
+  style.textContent+='button{border-radius:5px;border-color:#d3d0d0;color:#3a051f}.dot[data-active]{background:#3a051f}';
   const grip=document.createElement('span');grip.className='grip';grip.textContent='⋮⋮';grip.setAttribute('aria-hidden','true');
   const dot=document.createElement('span');dot.className='dot';dot.setAttribute('aria-hidden','true');
   const label=document.createElement('span');label.textContent='클라스노트 · 대기';label.setAttribute('role','status');

@@ -87,7 +87,7 @@ async function pump(){
  if(running||waiting||!queue.length)return;running=queue.shift();
  try{await run(running);}catch(e){
   const stopped=!!e.paused||cancelled.has(running.contentId);cancelled.delete(running.contentId);
-  const held=!stopped&&(e.code==='GROQ_RATE_LIMIT'||['GROQ_AUTH','GROQ_TRANSIENT','GROQ_MODEL_UNAVAILABLE'].includes(e.code)||/네이티브 호스트|연결 프로그램|Native host/i.test(e.message));
+  const held=!stopped&&(e.code==='GROQ_RATE_LIMIT'||['GROQ_AUTH','GROQ_PERMISSION','GROQ_TRANSIENT','GROQ_MODEL_UNAVAILABLE'].includes(e.code)||/네이티브 호스트|연결 프로그램|Native host/i.test(e.message));
   if(held){queue.unshift(running);waiting=e.code==='GROQ_RATE_LIMIT'?'rate':'connection';retryAt=waiting==='rate'?Math.max(Date.now()+1000,Number(e.retryAt)||Date.now()+60000):0;
    await status(running.contentId,{state:'queued',error:null,step:waiting==='rate'?'Groq 한도 대기 · '+new Date(retryAt).toLocaleString()+' 이후 자동 재개':'Groq 연결 대기 · 설정에서 키 확인 후 연결 테스트를 눌러 주세요.'});if(waiting==='rate')scheduleQuota();
   }else{const lec=await store.get('lectures',running.contentId);if(lec)await store.put('lectures',{...lec,state:stopped?'paused':'error',error:stopped?null:String(e.message||e)});
@@ -133,7 +133,9 @@ const handlers = {
     const html = await buildReport({ lecture, groups, summary, meta: { ...meta, asrModel: lecture.asrModel || '기존 받아쓰기', extensionId: chrome.runtime.id } });
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
-    return { url, title: lecture.title };
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(html));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    return { url, title: lecture.title, hash };
   },
   async list() {
     return { items: await store.allLectures() };

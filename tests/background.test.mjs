@@ -5,24 +5,29 @@ import {DEFAULT_SETTINGS,classifySender,safeName,parseSummary,cleanSettings,chec
 
 const id='0123456789abcdef',ext='klihhclhnhhmldcbnkpampimkjafmbdm',self=`chrome-extension://${ext}/`;
 const ui={id:ext,url:self+'confirm.html?id='+id,tab:{id:1}};
-let nativeFail=null;
+let nativeFail=null,reportHash=null,downloadItems=new Map(),downloadChanged,downloadErased,shown=[];
 let data,nativeCount,downloads,cache,pack,engineCount,nativeDelay=5,downloadFailures=0,panelOpens=[],lectureState='done',enqueueCount=0;
 const clone=v=>structuredClone(v);
 const summary={overview:'개요',slides:[{s:1,summary:['핵심'],comment:'설명'}],exam:['점검'],corrections:[]};
-function reset(){data={settings:{...DEFAULT_SETTINGS,consent:true,asrConsent:true,mode:'ai',provider:'claude'},opened:{[id]:1},statuses:{},metadata:{[id]:{course:'과목',title:'강의'}}};nativeCount=0;downloads=0;cache=null;engineCount=0;pack={prompt:'강의: 테스트',images:[],slideCount:1,estimate:{total:2000}};}
+function reset(){data={settings:{...DEFAULT_SETTINGS,consent:true,asrConsent:true,mode:'ai',provider:'claude'},opened:{[id]:1},statuses:{},metadata:{[id]:{course:'과목',title:'강의'}}};nativeCount=0;downloads=0;cache=null;engineCount=0;reportHash=null;downloadItems=new Map();shown=[];pack={prompt:'강의: 테스트',images:[],slideCount:1,estimate:{total:2000}};}
 reset();
 globalThis.chrome={
-  storage:{local:{get:async()=>clone(data),set:async v=>{data=clone(v);}}},
+  storage:{local:{get:async()=>clone(data),set:async v=>{data={...data,...clone(v)};}}},
   runtime:{id:ext,getURL:p=>self+p,lastError:null,onMessage:{addListener(){}},onInstalled:{addListener(){}},
     getContexts:async()=>[{documentUrl:self+'offscreen.html'}],
     sendMessage:async m=>{
       if(m.target!=='offscreen')return;
       engineCount++;
-      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return lectureState==='missing'?{ok:false,error:'아직 받아쓰기가 끝나지 않았습니다.'}:{ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
+      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return lectureState==='missing'?{ok:false,error:'아직 받아쓰기가 끝나지 않았습니다.'}:{ok:true,url:'blob:'+self+'abc',title:'CON',hash:reportHash};default:throw Error('unexpected engine command '+m.cmd);}
     },
     connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:m.cmd==='summarize'&&nativeFail?{ok:false,error:nativeFail}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
-  downloads:{download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;return downloads;}},
+  downloads:{
+    download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON_(원문|요약)\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;downloadItems.set(downloads,{id:downloads,state:'complete',exists:true,filename:args.filename});return downloads;},
+    search:async({id})=>downloadItems.has(id)?[clone(downloadItems.get(id))]:[],
+    show:async id=>{shown.push(id);},
+    onChanged:{addListener(fn){downloadChanged=fn;}},onErased:{addListener(fn){downloadErased=fn;}}
+  },
   offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},tabs:{create:async()=>({id:2})}
 };
 let panelPaths=[];
@@ -265,4 +270,95 @@ test('a rejected summary ticket does not mark the lecture as transcribed',async(
  reset();data.statuses[id]={state:'running',transcribed:false};
  await assert.rejects(send('summarize',{contentId:id,requestId:'stale'}),/만료/);
  assert.equal(data.statuses[id].state,'error');assert.equal(data.statuses[id].transcribed,false);
+});
+
+test('Drive authorization and opt-in controls belong only to options, and ordinary settings cannot enable export',async()=>{
+ reset();const options={id:ext,url:self+'options.html'};
+ for(const sender of [ui,{id:ext,url:self+'sidepanel.html'},{id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:2}}]){
+  for(const type of ['driveStatus','connectDrive','disconnectDrive','setDriveBackup','refreshDrive'])await assert.rejects(route({type,enabled:true},sender));
+ }
+ await assert.rejects(send('saveSettings',{settings:{driveBackup:true}}),/따로/);
+ await assert.rejects(route({type:'setDriveBackup',enabled:true},options),/연결/);
+ await assert.rejects(route({type:'connectDrive'},options),/준비/);
+ assert.equal(data.settings.driveBackup,false);assert.equal(downloads,0);assert.equal(nativeCount,0);
+ const status=await route({type:'driveStatus'},options);assert.equal(status.configured,false);assert.equal(status.connected,false);
+});
+
+test('concurrent HTML saves share one download; identical existing bytes are reused and deleted files can be restored',async()=>{
+ reset();reportHash='a'.repeat(64);
+ const first=await Promise.all([send('download',{contentId:id}),send('download',{contentId:id})]);
+ assert.equal(downloads,1);assert.equal(first[0].downloadId,first[1].downloadId);assert.equal(nativeCount,0);
+ assert.equal(data.statuses[id].localDownloads.raw.state,'complete');
+ const repeat=await send('download',{contentId:id});assert.equal(repeat.reused,true);assert.equal(downloads,1);assert.deepEqual(shown,[1]);
+ downloadItems.get(1).exists=false;
+ const restored=await send('download',{contentId:id});assert.equal(restored.reused,false);assert.equal(downloads,2);
+ reportHash='b'.repeat(64);await send('download',{contentId:id});assert.equal(downloads,3);
+});
+
+test('switching to a saved summary while a raw report is being built does not merge different report kinds',async()=>{
+ reset();reportHash='a'.repeat(64);data.settings.mode='local';
+ const original=chrome.runtime.sendMessage;let release,held=false;
+ const pause=new Promise(resolve=>release=resolve);
+ chrome.runtime.sendMessage=async message=>{
+   if(message.target==='offscreen'&&message.cmd==='report'&&!held){held=true;await pause;}
+   return original(message);
+ };
+ try{
+   const raw=send('download',{contentId:id});
+   while(!held)await new Promise(resolve=>setTimeout(resolve,1));
+   data.settings.mode='ai';cache={summary,summaryFormat:SUMMARY_FORMAT,createdAt:1};
+   await send('download',{contentId:id});release();await raw;
+   assert.equal(downloads,2);assert.match(downloadItems.get(1).filename,/_요약.html$/);assert.match(downloadItems.get(2).filename,/_원문.html$/);assert.equal(nativeCount,0);
+ }finally{release();chrome.runtime.sendMessage=original;}
+});
+
+test('raw and summary downloads are separate, and download failure never leaves a saved marker',async()=>{
+ reset();reportHash='a'.repeat(64);data.settings.mode='local';await send('download',{contentId:id});
+ cache={summary,summaryFormat:SUMMARY_FORMAT,createdAt:1};data.settings.mode='ai';await send('download',{contentId:id});
+ assert.equal(downloads,2);assert.match(downloadItems.get(1).filename,/_원문.html$/);assert.match(downloadItems.get(2).filename,/_요약.html$/);
+ assert.ok(data.statuses[id].localDownloads.raw);assert.ok(data.statuses[id].localDownloads.summary);
+ const reused=await send('download',{contentId:id});assert.equal(reused.downloadId,2);assert.equal(downloads,2);
+ reset();downloadFailures=1;await assert.rejects(send('download',{contentId:id}),/download failed/);
+ assert.equal(data.statuses[id]?.localDownloads,undefined);
+});
+
+test('download completion, interruption and erased records update the small local-save indicator state',async()=>{
+ reset();reportHash='a'.repeat(64);await send('download',{contentId:id});
+ downloadItems.get(1).state='in_progress';data.statuses[id].localDownloads.raw.state='in_progress';
+ const reused=await send('download',{contentId:id});assert.equal(reused.reused,true);assert.equal(downloads,1);assert.deepEqual(shown,[]);
+ downloadChanged({id:1,state:{current:'interrupted'}});
+ for(let i=0;i<40&&data.statuses[id].localDownloads.raw.state!=='interrupted';i++)await new Promise(r=>setTimeout(r,1));
+ assert.equal(data.statuses[id].localDownloads.raw.state,'interrupted');
+ downloadChanged({id:1,state:{current:'complete'}});
+ for(let i=0;i<40&&data.statuses[id].localDownloads.raw.state!=='complete';i++)await new Promise(r=>setTimeout(r,1));
+ assert.equal(data.statuses[id].localDownloads.raw.state,'complete');
+ downloadErased(1);
+ for(let i=0;i<40&&data.statuses[id].localDownloads.raw.state!=='missing';i++)await new Promise(r=>setTimeout(r,1));
+ assert.equal(data.statuses[id].localDownloads.raw.state,'missing');
+});
+
+test('concurrent processing requests enqueue once and completed transcription is never enqueued again',async()=>{
+ reset();enqueueCount=0;
+ await Promise.all([send('startProcessing',{contentId:id}),send('startProcessing',{contentId:id})]);assert.equal(enqueueCount,1);
+ data.statuses[id]={state:'done',transcribed:true};const result=await send('startProcessing',{contentId:id});assert.equal(result.ready,true);assert.equal(enqueueCount,1);
+});
+
+test('regenerating transcription marks older local reports stale; matching exact bytes still reuse the file',async()=>{
+ reset();reportHash='a'.repeat(64);await send('download',{contentId:id});
+ await route({type:'status',contentId:id,patch:{state:'running'}},{id:ext,url:self+'offscreen.html'});
+ assert.equal(data.statuses[id].localDownloads.raw.outdated,true);
+ const result=await send('download',{contentId:id});assert.equal(result.reused,true);assert.equal(downloads,1);
+ assert.equal(data.statuses[id].localDownloads.raw.outdated,false);
+});
+
+test('failure to prepare a cloud backup preserves the local download and saved AI result',async()=>{
+ reset();data.settings.driveBackup=true;data.drive={account:{id:'fixture-account',email:'private@example.test'},records:{}};
+ const original=globalThis.fetch;globalThis.fetch=async()=>new Response('fixture HTML');
+ try{
+  const result=await send('download',{contentId:id});
+  assert.equal(result.downloadId,1);assert.equal(result.backupQueued,false);assert.match(result.backupError,/다운로드.*Drive/);
+  assert.equal(nativeCount,0);assert.equal(downloads,1);
+  const view=await route({type:'getState'},{id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:2}});
+  assert.equal(Object.hasOwn(view.drive,'email'),false);assert.equal(JSON.stringify(view.drive).includes('fixture-account'),false);
+ }finally{globalThis.fetch=original;reset();}
 });

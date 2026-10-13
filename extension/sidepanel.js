@@ -60,6 +60,7 @@ function openConsentOnce() {
 }
 
 function modeLabel(settings) {
+  if(settings?.driveBackup)return settings.mode==='ai'?'AI 모드 · Drive 백업 켜짐':'원문만 · Drive 백업 켜짐';
   return settings?.mode==='ai'?'AI 모드 · 내 계정 사용량':'로컬 전용';
 }
 
@@ -96,7 +97,7 @@ function clampProgress(p) {
   return Math.min(1, Math.max(0, p));
 }
 
-function buildItem(contentId, status, metadata, opened) {
+function buildItem(contentId, status, metadata, opened, driveRecord, mode) {
   const meta = metadata?.[contentId] || {};
   const li = document.createElement('li');
   li.className = 'sp-item';
@@ -122,6 +123,14 @@ function buildItem(contentId, status, metadata, opened) {
   badge.dataset.s = state || 'opened';
   badge.textContent = state ? (STATUS_LABEL[state] || UNKNOWN_LABEL) : opened?OPENED_LABEL:'열람 전';
   row.appendChild(badge);
+  const localBadge=globalThis.KlasnoteLocalReportUI?.create(status,mode);
+  if(localBadge)row.appendChild(localBadge);
+  const driveBadge = globalThis.KlasnoteDriveUI?.create(driveRecord, async () => {
+    const res = await callBg('retryDrive', { contentId });
+    if (res.ok === false) showError(res.error);
+    await refresh();
+  });
+  if (driveBadge) row.appendChild(driveBadge);
 
   const progress = status ? clampProgress(status.progress) : null;
   if (status && PROGRESS_STATES.has(state) && progress !== null) {
@@ -142,8 +151,9 @@ function buildItem(contentId, status, metadata, opened) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'sp-mini-btn';
-    btn.textContent = action.label;
-    btn.disabled = pending.has(contentId);
+    const localRecord=globalThis.KlasnoteLocalReportUI?.current(status,mode);
+    btn.textContent = action.type==='download'&&localRecord?.outdated?'최신 HTML 받기':action.type==='download'&&localRecord?.state==='complete'?'HTML 확인':action.type==='download'&&localRecord?.state==='in_progress'?'다운로드 중':action.label;
+    btn.disabled = pending.has(contentId)||(action.type==='download'&&localRecord?.state==='in_progress');
     btn.addEventListener('click', async (e) => {
       if (!e.isTrusted) return;
       if (pending.has(contentId)) return;
@@ -156,6 +166,7 @@ function buildItem(contentId, status, metadata, opened) {
       if (res && res.ok === false) {
         showError(res.error || '요청을 처리하지 못했어요.');
       }
+      else if(res?.backupError) showError(res.backupError);
       await refresh();
     });
     row.appendChild(btn);
@@ -167,7 +178,11 @@ function buildItem(contentId, status, metadata, opened) {
     raw.className = 'sp-mini-btn';
     raw.textContent = 'HTML 받기';
     raw.title = 'AI 요약 없이 받아쓰기 원문으로 HTML을 받습니다.';
-    raw.disabled = pending.has(contentId);
+    const localRecord=globalThis.KlasnoteLocalReportUI?.current(status,mode);
+    raw.disabled = pending.has(contentId)||localRecord?.state==='in_progress';
+    if(localRecord?.outdated)raw.textContent='최신 HTML 받기';
+    else if(localRecord?.state==='complete')raw.textContent='HTML 확인';
+    else if(localRecord?.state==='in_progress')raw.textContent='다운로드 중';
     raw.addEventListener('click', async (e) => {
       if (!e.isTrusted || pending.has(contentId)) return;
       clearError();
@@ -176,6 +191,7 @@ function buildItem(contentId, status, metadata, opened) {
       const res = await callBg('download', { contentId });
       pending.delete(contentId);
       if (res && res.ok === false) showError(res.error || 'HTML을 저장하지 못했어요.');
+      else if(res?.backupError) showError(res.backupError);
       await refresh();
     });
     row.appendChild(raw);
@@ -215,7 +231,7 @@ function buildItem(contentId, status, metadata, opened) {
   if (status && state === 'complete') {
     const hint = document.createElement('div');
     hint.className = 'sp-item__hint';
-    hint.textContent = '저장된 HTML을 다시 받아요 (추가 AI 처리 없음).';
+    hint.textContent = '저장된 결과를 사용해요. 같은 HTML이 PC에 남아 있으면 추가 복사본을 만들지 않아요.';
     li.appendChild(hint);
   }
 
@@ -281,7 +297,7 @@ async function refresh() {
   } else {
     el('emptyMsg').hidden = true;
     for (const contentId of ids) {
-      list.appendChild(buildItem(contentId, statuses[contentId] || null, metadata,!!opened[contentId]));
+      list.appendChild(buildItem(contentId, statuses[contentId] || null, metadata,!!opened[contentId],res.drive?.backups?.[contentId],settings.mode));
     }
   }
 
@@ -294,6 +310,7 @@ let onStorageChanged = null;
 let onVisibility = null;
 
 function init() {
+  const driveStyle = document.createElement('style'); driveStyle.textContent = (globalThis.KlasnoteDriveUI?.css || '')+(globalThis.KlasnoteLocalReportUI?.css || ''); document.head.append(driveStyle);
   scene = mountCampusScene(el('campusHost'), {
     state: 'idle', motion: true, compact: true,
     onToggleMotion: async (motion) => {
@@ -320,7 +337,7 @@ function init() {
       chrome.runtime.onMessage.addListener(onRuntimeMessage);
     }
     if (chrome.storage && chrome.storage.onChanged) {
-      onStorageChanged = (changes,area) => { if (area==='local'&&(changes.settings||changes.statuses||changes.opened||changes.metadata)&&!document.hidden) refresh(); };
+      onStorageChanged = (changes,area) => { if (area==='local'&&(changes.settings||changes.statuses||changes.opened||changes.metadata||changes.drive)&&!document.hidden) refresh(); };
       chrome.storage.onChanged.addListener(onStorageChanged);
     }
     onVisibility = () => { if (!document.hidden) refresh(); };

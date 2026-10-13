@@ -146,7 +146,7 @@ async function doSummarize() {
   }
 
   sentOnce = true;
-  setStatus('완료되었습니다. 다운로드가 시작됩니다.', 'ok');
+  setStatus(res.backupError || globalThis.KlasnoteLocalReportUI.message(res), res.backupError ? 'error' : 'ok');
   scene?.setState('success', { holdMs: 5000 });
   cancelBtn.disabled = false;
   cancelBtn.textContent = '닫기';
@@ -162,7 +162,7 @@ async function doRedownload() {
   if (res.ok === false) {
     setStatus(`다운로드 실패: ${res.error || ''}`, 'error');
   } else {
-    setStatus('다운로드를 다시 시작했습니다.', 'ok');
+    setStatus(res.backupError || globalThis.KlasnoteLocalReportUI.message(res), res.backupError ? 'error' : 'ok');
   }
 }
 

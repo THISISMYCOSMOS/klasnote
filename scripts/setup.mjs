@@ -4,6 +4,7 @@ import os from 'node:os';
 import {spawn,spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {HOST_NAME as hostName,EXTENSION_ID as extensionId,platformPaths,macHostScript} from './platform.mjs';
+import {manifestExtensionId} from './diagnose.mjs';
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const registryKey=`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName}`;
@@ -15,10 +16,12 @@ function inspectTree(file){
   if(stat.isDirectory())for(const name of fs.readdirSync(file))inspectTree(path.join(file,name));
 }
 export function checkSource(root=source){
+  if(typeof fetch!=='function'||typeof FormData!=='function'||typeof Blob!=='function')throw Error('Node.js가 오래되어 Groq 연결을 실행할 수 없습니다. 최신 Node.js LTS를 설치하세요.');
   for(const file of required)if(!fs.existsSync(path.join(root,file)))throw Error(`설치 파일 누락: ${file}. 설치 ZIP을 다시 풀어주세요.`);
   inspectTree(path.join(root,'extension'));inspectTree(path.join(root,'native-host'));
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'extension/manifest.json'),'utf8'));
   if(manifest.manifest_version!==3||!manifest.key||!manifest.side_panel?.default_path)throw Error('확장 프로그램 설정 파일이 올바르지 않습니다.');
+  if(manifestExtensionId(manifest.key)!==extensionId)throw Error('확장 ID와 연결 프로그램 등록 ID가 일치하지 않습니다. 공식 설치 ZIP을 다시 풀어주세요.');
   return {files:required.length,version:manifest.version};
 }
 // manifestPath: Windows는 설치 폴더 안(레지스트리가 가리킴), macOS는 Chrome의 NativeMessagingHosts 폴더.

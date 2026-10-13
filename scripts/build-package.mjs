@@ -11,7 +11,7 @@ const { version } = checkSource(root); // 필수 파일(vendor 포함)이 없으
 const stage = path.join(root, 'dist', 'klasnote');
 const out = path.join(root, 'downloads', `klasnote-${version}.zip`);
 const include = ['extension', 'native-host/host.mjs', 'native-host/groq.mjs', 'scripts/platform.mjs', 'scripts/setup.mjs', 'scripts/start.mjs', 'scripts/chrome-launch.mjs',
-  'start.cmd', 'install.cmd', 'uninstall.ps1', 'start.command', 'install.command', 'uninstall.command', 'README.md', 'docs/licenses', 'docs/images', 'package.json'];
+  'start.cmd', 'install.cmd', 'uninstall.ps1', 'start.command', 'install.command', 'uninstall.command', 'diagnose.cmd', 'diagnose.command', 'scripts/diagnose.mjs', 'README.md', 'docs/google-drive-setup.md', 'docs/licenses', 'docs/images', 'package.json'];
 
 fs.rmSync(path.join(root, 'dist'), { recursive: true, force: true });
 for (const item of include) {

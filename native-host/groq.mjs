@@ -18,6 +18,13 @@ export class GroqError extends Error {
 }
 
 function failure(code, message) { throw new GroqError(code, message); }
+function connectionFailure(error){
+  const code=error?.cause?.code||error?.code;
+  if(['ENOTFOUND','EAI_AGAIN'].includes(code))failure('GROQ_TRANSIENT','Groq 주소를 찾을 수 없습니다. 인터넷·DNS·프록시 설정을 확인하세요.');
+  if(['CERT_HAS_EXPIRED','DEPTH_ZERO_SELF_SIGNED_CERT','SELF_SIGNED_CERT_IN_CHAIN','UNABLE_TO_VERIFY_LEAF_SIGNATURE','UNABLE_TO_GET_ISSUER_CERT_LOCALLY'].includes(code))failure('GROQ_TRANSIENT','Groq 보안 연결의 인증서를 확인할 수 없습니다. PC 날짜·보안 프로그램·회사/학교 인증서 설정을 확인하세요.');
+  if(['ECONNREFUSED','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT'].includes(code))failure('GROQ_TRANSIENT','Groq 서버에 연결할 수 없습니다. 방화벽·프록시·네트워크 연결을 확인하세요.');
+  failure('GROQ_TRANSIENT', 'Groq에 연결하거나 응답을 읽을 수 없습니다. 네트워크 설정을 확인하고 다시 시도하세요.');
+}
 function abortError() { return new DOMException('Groq 전사를 취소했습니다.', 'AbortError'); }
 function validateKey(apiKey) {
   if (typeof apiKey !== 'string' || !/^[\x21-\x7e]{8,512}$/.test(apiKey)) {
@@ -182,7 +189,8 @@ export async function transcribeGroq({ audioB64, offset = 0, duration, apiKey, s
       // Never read/reflect error bodies: they can contain credentials or submitted content.
       try { await response.body?.cancel(); } catch {}
       if (response.status === 429) throw new GroqError('GROQ_RATE_LIMIT', 'Groq 사용 한도에 도달했습니다. 안내된 시간 이후 다시 시도하세요.', retryDetails(response.headers?.get('retry-after')));
-      if (response.status === 401 || response.status === 403) failure('GROQ_AUTH', 'Groq API 키를 설정하거나 다시 확인하세요.');
+      if (response.status === 401) failure('GROQ_AUTH', 'Groq 인증이 거부됐어요(401). 저장한 API 키를 다시 확인하세요.');
+      if (response.status === 403) failure('GROQ_PERMISSION', 'Groq 권한이 거부됐어요(403). 조직·프로젝트의 모델 사용 권한과 계정 설정을 확인하세요.');
       if (response.status === 413) failure('GROQ_INPUT_SIZE', 'Groq에서 오디오 크기 제한을 초과했습니다.');
       if (response.status >= 500 || response.status === 408) failure('GROQ_TRANSIENT', 'Groq 서버에 일시적인 문제가 있습니다. 다시 시도하세요.');
       failure('GROQ_REQUEST', 'Groq 전사 요청을 처리할 수 없습니다. 오디오와 설정을 확인하세요.');
@@ -193,7 +201,7 @@ export async function transcribeGroq({ audioB64, offset = 0, duration, apiKey, s
     scope.check();
     if (error instanceof GroqError) throw error;
     if (error?.name === 'AbortError') throw abortError();
-    failure('GROQ_TRANSIENT', 'Groq에 연결하거나 응답을 읽을 수 없습니다. 다시 시도하세요.');
+    connectionFailure(error);
   } finally { scope.cleanup(); }
 }
 
@@ -214,7 +222,8 @@ export async function testGroqConnection({ apiKey, signal, fetchImpl = globalThi
     if (!response.ok) {
       try { await response.body?.cancel(); } catch {}
       if (response.status === 429) throw new GroqError('GROQ_RATE_LIMIT', 'Groq 사용 한도에 도달했습니다. 안내된 시간 이후 다시 시도하세요.', retryDetails(response.headers?.get('retry-after')));
-      if (response.status === 401 || response.status === 403) failure('GROQ_AUTH', 'Groq API 키를 설정하거나 다시 확인하세요.');
+      if (response.status === 401) failure('GROQ_AUTH', 'Groq 인증이 거부됐어요(401). 저장한 API 키를 다시 확인하세요.');
+      if (response.status === 403) failure('GROQ_PERMISSION', 'Groq 권한이 거부됐어요(403). 조직·프로젝트의 모델 사용 권한과 계정 설정을 확인하세요.');
       if (response.status >= 500 || response.status === 408) failure('GROQ_TRANSIENT', 'Groq 서버에 일시적인 문제가 있습니다. 다시 시도하세요.');
       failure('GROQ_REQUEST', 'Groq 연결 확인 요청을 처리할 수 없습니다.');
     }
@@ -230,7 +239,7 @@ export async function testGroqConnection({ apiKey, signal, fetchImpl = globalThi
     scope.check();
     if (error instanceof GroqError) throw error;
     if (error?.name === 'AbortError') throw abortError();
-    failure('GROQ_TRANSIENT', 'Groq에 연결하거나 응답을 읽을 수 없습니다. 다시 시도하세요.');
+    connectionFailure(error);
   } finally { scope.cleanup(); }
 }
 

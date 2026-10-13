@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS = {
   confirmBeforeSend: true,
   asrConsent: false,
   motion: true,
+  driveBackup: false,
 };
 
 function hasRuntime() {
@@ -169,6 +170,14 @@ function buildLectureItem(item) {
   badge.textContent = STATUS_LABEL[stateKey] || (stateKey ? stateKey : '미시작');
   meta.appendChild(document.createElement('br'));
   meta.appendChild(badge);
+  const driveBadge = globalThis.KlasnoteDriveUI?.create(latest.drive?.backups?.[item.contentId], async () => {
+    const res = await callBg('retryDrive', { contentId: item.contentId });
+    if (res.ok === false) el('driveResult').textContent = res.error;
+    await refresh();
+  });
+  if (driveBadge) meta.appendChild(driveBadge);
+  const localBadge=globalThis.KlasnoteLocalReportUI?.create(status,latest.settings?.mode);
+  if(localBadge)meta.appendChild(localBadge);
 
   if (status && (status.state === 'running' || status.state === 'summarizing') && Number.isFinite(status.progress)) {
     const bar = document.createElement('div');
@@ -207,21 +216,32 @@ function buildLectureItem(item) {
       await callBg('openConfirm', { contentId: item.contentId, force: false });
     }));
   } else {
-    const runBtn = makeBtn(hasSummary ? '요약 다시 만들기' : '지금 요약', 'btn--primary', async () => {
-      await callBg('openConfirm', { contentId: item.contentId, force: hasSummary });
+    const runBtn = makeBtn(hasSummary ? '저장된 요약 확인' : '지금 요약', 'btn--primary', async () => {
+      await callBg('openConfirm', { contentId: item.contentId, force: false });
     });
-    if (!opened) {
+    if (!opened||['queued','running','summarizing'].includes(stateKey)) {
       runBtn.disabled = true;
-      runBtn.title = '이 강의를 한 번 이상 열어본 뒤에 사용할 수 있어요.';
+      runBtn.title = !opened?'이 강의를 한 번 이상 열어본 뒤에 사용할 수 있어요.':'이미 처리 중인 강의입니다.';
     }
     actions.appendChild(runBtn);
+    if(hasSummary&&opened&&!['queued','running','summarizing'].includes(stateKey)){
+      const regenerate=makeBtn('새 요약 만들기','btn--ghost',async()=>{
+        await callBg('openConfirm',{contentId:item.contentId,force:true});
+      });
+      regenerate.title='새 AI 요청은 전송 확인을 거친 뒤 실행됩니다.';
+      actions.appendChild(regenerate);
+    }
   }
 
-  if (hasSummary) {
-    actions.appendChild(makeBtn('다운로드', 'btn--ghost', async () => {
+  if (hasSummary||['done','awaiting_confirmation'].includes(stateKey)||status?.transcribed) {
+    const localRecord=globalThis.KlasnoteLocalReportUI?.current(status,latest.settings?.mode);
+    const downloadBtn=makeBtn(localRecord?.outdated?'최신 HTML 받기':localRecord?.state==='complete'?'HTML 확인':localRecord?.state==='in_progress'?'다운로드 중':'HTML 받기', 'btn--ghost', async () => {
       const res = await callBg('download', { contentId: item.contentId });
       if (!res.ok) showTemp(el('saveResult'), `다운로드 실패: ${res.error || ''}`);
-    }));
+      else showTemp(el('saveResult'),res.backupError||globalThis.KlasnoteLocalReportUI.message(res));
+    });
+    downloadBtn.disabled=localRecord?.state==='in_progress';
+    actions.appendChild(downloadBtn);
   }
 
   if (stateKey === 'queued' || stateKey === 'running' || stateKey === 'summarizing') {
@@ -247,9 +267,10 @@ function makeBtn(text, cls, onClick) {
   b.type = 'button';
   b.className = `btn ${cls}`;
   b.textContent = text;
-  b.addEventListener('click', (e) => {
-    if (!e.isTrusted) return;
-    onClick(e);
+  b.addEventListener('click', async (e) => {
+    if (!e.isTrusted||b.disabled) return;
+    b.disabled=true;
+    try{await onClick(e);}finally{b.disabled=false;}
   });
   return b;
 }
@@ -279,6 +300,7 @@ async function refresh() {
       statuses: stateRes.statuses || {},
       opened: stateRes.opened || {},
       metadata: stateRes.metadata || {},
+      drive: stateRes.drive || {},
     };
     // 사용자가 폼을 고치고 있는 중이면(저장 전) 백그라운드 값으로 덮어쓰지 않는다.
     if (!formDirty) {
@@ -293,6 +315,24 @@ async function refresh() {
     renderLibrary();
   }
   scene?.setState(overallMascotState());
+  await renderDrive();
+}
+
+let driveBusy = false;
+async function renderDrive() {
+  const res = await callBg('driveStatus');
+  if (res.ok === false) { el('driveAccount').textContent = res.error; return; }
+  el('driveAccount').textContent = res.connected ? `연결됨 · ${res.email || 'Google 계정'}` : '연결 안 됨';
+  el('driveBackup').checked = latest.settings.driveBackup === true;
+  el('driveBackup').disabled = driveBusy || !res.connected;
+  el('connectDrive').disabled = driveBusy || !res.configured;
+  el('connectDrive').textContent = res.connected ? 'Google 계정 다시 연결' : 'Google 계정 연결';
+  el('connectDrive').hidden = false;
+  el('disconnectDrive').hidden = !res.connected;
+  el('refreshDrive').hidden = !res.connected;
+  el('disconnectDrive').disabled = driveBusy;
+  el('refreshDrive').disabled = driveBusy;
+  el('driveSetup').hidden = res.configured;
 }
 
 function gatherSettingsFromForm() {
@@ -307,22 +347,69 @@ function gatherSettingsFromForm() {
   if (!ALLOWED.claudeModel.includes(claudeModel)) throw new Error('invalid claudeModel');
   if (!/^[a-z0-9][a-z0-9.\-]{1,40}$/.test(codexModel)) throw new Error('invalid codexModel');
   if (!ALLOWED.preset.includes(preset)) throw new Error('invalid preset');
-  return { ...latest.settings, provider, claudeModel, codexModel, preset, asrConsent, confirmBeforeSend, motion };
+  const { driveBackup, ...previous } = latest.settings;
+  return { ...previous, provider, claudeModel, codexModel, preset, asrConsent, confirmBeforeSend, motion };
 }
 
 async function groqStatus(){const r=await callBg('groqStatus');el('groqState').textContent=r.ok===false?'연결 프로그램 확인 필요: '+r.error:r.configured?'Groq 키 저장됨 · 연결 테스트를 눌러 확인하세요.':'Groq API 키가 없습니다.';}
+let groqBusy=false;
+async function groqAction(operation){
+  if(groqBusy)return;
+  groqBusy=true;
+  for(const id of ['saveGroqKey','testGroq','removeGroqKey','groqApiKey'])el(id).disabled=true;
+  try{await operation();}finally{
+    groqBusy=false;
+    for(const id of ['saveGroqKey','testGroq','removeGroqKey','groqApiKey'])el(id).disabled=false;
+  }
+}
+async function saveEnteredGroqKey(){
+  const key=el('groqApiKey').value.trim();
+  const result=key?await callBg('saveGroqKey',{apiKey:key}):await callBg('groqStatus');
+  if(result.ok===false||!result.configured){el('groqState').textContent=result.error||'API 키를 입력하세요.';return false;}
+  if(key)el('groqApiKey').value='';
+  return true;
+}
 function wireEvents() {
+  for (const [id, type] of [['connectDrive','connectDrive'],['disconnectDrive','disconnectDrive'],['refreshDrive','refreshDrive'],['driveBackup','setDriveBackup']]) {
+    el(id).addEventListener(id === 'driveBackup' ? 'change' : 'click', async e => {
+      if (!e.isTrusted || driveBusy) return;
+      driveBusy = true; el('driveResult').textContent = '확인 중…';
+      try {
+        // Permission request stays in the trusted options-page click, before any await.
+        if (type === 'connectDrive' && !await chrome.permissions.request({ origins:['https://www.googleapis.com/*'] })) {
+          el('driveResult').textContent = 'Drive 연결 권한을 허용하지 않았어요.'; return;
+        }
+        const res = await callBg(type, type === 'setDriveBackup' ? { enabled:el('driveBackup').checked } : {});
+        el('driveResult').textContent = res.ok === false ? res.error : type === 'connectDrive' ? '계정을 연결했어요. 자동 백업을 켜면 다음 다운로드부터 적용돼요.' : type === 'disconnectDrive' ? '연결을 해제했어요. Drive의 파일은 남아 있습니다.' : type === 'setDriveBackup' ? '백업 설정을 저장했어요.' : '백업 상태를 확인했어요.';
+      } catch { el('driveResult').textContent = 'Drive 연결을 확인할 수 없어요. 다시 시도해주세요.'; }
+      finally { driveBusy = false; await refresh(); }
+    });
+  }
   el('saveGroqKey').addEventListener('click',async e=>{
     if(!e.isTrusted)return;
-    const key=el('groqApiKey').value.trim();el('groqApiKey').value='';
-    let r=key?await callBg('saveGroqKey',{apiKey:key}):await callBg('groqStatus');
-    if(r.ok===false||!r.configured){el('groqState').textContent=r.error||'API 키를 입력하세요.';return;}
-    r=await callBg('saveSettings',{settings:{asrConsent:el('asrConsent').checked}});
-    if(r.ok===false){el('groqState').textContent=r.error;return;}
-    latest.settings={...latest.settings,...r.settings};el('groqState').textContent='키·음성 전송 동의를 저장했습니다. 연결 테스트로 확인하세요.';
+    await groqAction(async()=>{
+      if(!await saveEnteredGroqKey())return;
+      const r=await callBg('saveSettings',{settings:{asrConsent:el('asrConsent').checked}});
+      if(r.ok===false){el('groqState').textContent='키는 저장했지만 음성 전송 동의 저장에 실패했어요: '+r.error;return;}
+      latest.settings={...latest.settings,...r.settings};el('groqState').textContent='키·음성 전송 동의를 저장했습니다. 연결 테스트로 확인하세요.';
+    });
   });
-  el('testGroq').addEventListener('click',async e=>{if(!e.isTrusted)return;el('groqState').textContent='Groq 연결 확인 중…';const r=await callBg('testGroq');el('groqState').textContent=r.ok===false?'연결 실패: '+r.error:'Groq 연결 성공 · '+r.model+' 사용 가능. 음성 인식 품질은 실제 강의 처리 후 확인할 수 있습니다.';});
-  el('removeGroqKey').addEventListener('click',async e=>{if(!e.isTrusted)return;el('groqApiKey').value='';const r=await callBg('removeGroqKey');el('groqState').textContent=r.ok===false?r.error:r.configured?'파일의 키는 삭제됐지만 환경 변수 키가 남아 있습니다.':'Groq 키를 삭제했습니다.';});
+  el('testGroq').addEventListener('click',async e=>{
+    if(!e.isTrusted)return;
+    await groqAction(async()=>{
+      if(!await saveEnteredGroqKey())return;
+      el('groqState').textContent='Groq 연결 확인 중…';
+      const r=await callBg('testGroq');
+      el('groqState').textContent=r.ok===false?'연결 실패: '+r.error:r.queueResumeError||'Groq 연결 성공 · '+r.model+' 사용 가능. 음성 인식 품질은 실제 강의 처리 후 확인할 수 있습니다.';
+    });
+  });
+  el('removeGroqKey').addEventListener('click',async e=>{
+    if(!e.isTrusted)return;
+    await groqAction(async()=>{
+      const r=await callBg('removeGroqKey');if(r.ok!==false)el('groqApiKey').value='';
+      el('groqState').textContent=r.ok===false?r.error:r.configured?'파일의 키는 삭제됐지만 환경 변수 키가 남아 있습니다.':'Groq 키를 삭제했습니다.';
+    });
+  });
   el('detectBtn').addEventListener('click', async (e) => {
     if (!e.isTrusted) return;
     el('detectResult').textContent = '감지 중…';
@@ -385,10 +472,12 @@ function wireEvents() {
     chrome.runtime.onMessage.addListener((msg) => {
       if (!document.hidden && msg && msg.target === 'ui' && msg.type === 'stateChanged') refresh();
     });
+    chrome.storage.onChanged.addListener((changes,area) => { if(area === 'local' && changes.drive && !document.hidden) refresh(); });
   }
 }
 
 function init() {
+  const driveStyle = document.createElement('style'); driveStyle.textContent = (globalThis.KlasnoteDriveUI?.css || '')+(globalThis.KlasnoteLocalReportUI?.css || ''); document.head.append(driveStyle);
   scene = mountCampusScene(el('campusHost'), {
     state: 'idle',
     motion: true,

@@ -291,7 +291,7 @@ test('connection check only requests fixed model listing endpoint and checks ASR
 });
 
 test('connection check preserves safe 429/auth/transient errors, cancellation and response size', async () => {
-  for (const [status, code] of [[429,'GROQ_RATE_LIMIT'],[401,'GROQ_AUTH'],[403,'GROQ_AUTH'],[500,'GROQ_TRANSIENT'],[400,'GROQ_REQUEST']]) {
+  for (const [status, code] of [[429,'GROQ_RATE_LIMIT'],[401,'GROQ_AUTH'],[403,'GROQ_PERMISSION'],[500,'GROQ_TRANSIENT'],[400,'GROQ_REQUEST']]) {
     await assert.rejects(testGroqConnection({ apiKey: fixtureKey, fetchImpl: async () => response({ error: fixtureKey }, { status, headers: { 'retry-after': '10' } }) }), (error) => {
       assert.equal(error.code, code);
       if (status === 429) { assert.equal(error.retryAfter, 10); assert.ok(error.retryAt > Date.now()); }

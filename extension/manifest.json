@@ -11,11 +11,13 @@
     "offscreen",
     "nativeMessaging",
     "downloads",
-    "sidePanel"
+    "sidePanel",
+    "identity"
   ],
   "host_permissions": [
     "https://kwcommons.kw.ac.kr/*"
   ],
+  "optional_host_permissions": ["https://www.googleapis.com/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -52,6 +54,8 @@
         "https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do*"
       ],
       "js": [
+        "drive-badge.js",
+        "local-report-ui.js",
         "content/klas-list.js"
       ],
       "run_at": "document_idle"

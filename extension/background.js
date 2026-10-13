@@ -1,6 +1,7 @@
 import {DEFAULT_SETTINGS,validId,cleanSettings,cleanMeta,safeName,classifySender,parseSummary,checkPayload} from './src/core/policy.js';
 import * as store from './src/core/store.js';
 import {SUMMARY_FORMAT} from './src/core/pack.js';
+import {createDriveBackup} from './src/core/drive.js';
 
 const SELF=chrome.runtime.getURL('');
 const HOST='com.klas_summarizer.host';
@@ -8,7 +9,22 @@ let storageTail=Promise.resolve(), engineCreation=null;
 const active=new Set(), deleted=new Set();
 const nativeJobs=new Map(),asrJobs=new Map();
 const lastOpened=new Map(); // 강의 열림 이벤트 중복 방지(두 플레이어 프레임·빠른 재열기)
+const downloadTasks=new Map(), processingTasks=new Map();
 async function state(){const s=await chrome.storage.local.get(['settings','statuses','opened','metadata']);return {settings:cleanSettings({},s.settings),statuses:s.statuses??{},opened:s.opened??{},metadata:s.metadata??{}};}
+const drive=createDriveBackup({chrome,jobs:{all:store.driveJobs,put:job=>store.put('driveJobs',job),remove:store.removeDriveJob},settings:async()=>(await state()).settings});
+let driveCheckedAt=0;
+let localDownloadsCheckedAt=0;
+async function publicState(){
+  if(Date.now()-localDownloadsCheckedAt>30000){localDownloadsCheckedAt=Date.now();await checkLocalDownloads().catch(()=>{});}
+  const s=await state();if(Date.now()-driveCheckedAt>60000){driveCheckedAt=Date.now();void drive.refresh().catch(()=>{});}return {...s,drive:await drive.view(s.settings.mode==='local'?'raw':'summary')};
+}
+chrome.downloads.onChanged?.addListener(delta=>{
+  void drive.downloadChanged(delta).catch(()=>{});
+  if(delta.state||delta.exists)void updateLocalDownload(delta.id,delta.state?.current,delta.exists?.current).catch(()=>{});
+});
+chrome.downloads.onErased?.addListener(id=>{void updateLocalDownload(id,'missing',false).catch(()=>{});});
+chrome.runtime.onStartup?.addListener(()=>{void drive.recover().catch(()=>{});});
+void drive.recover().catch(()=>{});
 function mutate(fn){const p=storageTail.then(async()=>{const s=await state();await fn(s);await chrome.storage.local.set(s);chrome.runtime.sendMessage({target:'ui',type:'stateChanged'}).catch(()=>{});return s;});storageTail=p.catch(()=>{});return p;}
 async function patch(id,p){await mutate(s=>{s.statuses[id]={...s.statuses[id],...p,updatedAt:Date.now()};});}
 function requiredId(id){if(!validId(id))throw new Error('올바르지 않은 강의 ID');return id.toLowerCase();}
@@ -70,12 +86,40 @@ export function friendlyError(message){
   if(/claude/i.test(text)&&/does not support this model|newer is required|claude update/i.test(text))return 'Claude Code가 오래되어 선택한 모델을 쓸 수 없습니다. 터미널에서 claude update를 실행한 뒤 다시 시도하세요. (원문: '+text.slice(0,160)+')';
   return text;
 }
+async function updateLocalDownload(downloadId,downloadState,exists){
+  await mutate(s=>{
+    for(const status of Object.values(s.statuses))for(const record of Object.values(status.localDownloads||{})){
+      if(record.downloadId!==downloadId)continue;
+      if(exists===false)record.state='missing';
+      else if(downloadState)record.state=downloadState;
+      if(downloadState==='complete'&&exists!==false)record.savedAt=Date.now();
+    }
+  });
+}
+async function checkLocalDownloads(){
+  if(!chrome.downloads.search)return;
+  const s=await state();
+  for(const status of Object.values(s.statuses))for(const record of Object.values(status.localDownloads||{})){
+    if(!['complete','in_progress'].includes(record.state))continue;
+    const [found]=await chrome.downloads.search({id:record.downloadId});
+    const next=!found||found.exists===false?'missing':found.state;
+    if(next!==record.state)await updateLocalDownload(record.downloadId,next,found?.exists);
+  }
+}
 async function download(id){
   const s=await allowed(id);
   const cached=await engine('getSummary',{contentId:id});
   const item=s.settings.mode==='ai'?cached.item:null;
+  // A new summary or a mode change must not share an older raw-file request.
+  const key=JSON.stringify([id,s.settings.mode,item,s.statuses[id]?.reportCreatedAt,s.metadata[id]]);
+  if(downloadTasks.has(key))return downloadTasks.get(key);
+  const task=saveDownload(id,s,item).finally(()=>downloadTasks.delete(key));
+  downloadTasks.set(key,task);return task;
+}
+async function saveDownload(id,s,item){
+  const createdAt=item?.createdAt??s.statuses[id]?.reportCreatedAt??Date.now();
   let r;
-  try{r=await engine('report',{contentId:id,summary:item?.summary??null,meta:{aiLabel:item?.aiLabel??'AI 요약 없음',createdAt:item?.createdAt??Date.now()}});}
+  try{r=await engine('report',{contentId:id,summary:item?.summary??null,meta:{aiLabel:item?.aiLabel??'AI 요약 없음',createdAt}});}
   catch(e){
     // 상태는 완료인데 이 Chrome 저장소에 받아쓰기가 없으면(다른 프로필에서 처리했거나 지워진 경우) 다시 받아쓰도록 안내한다.
     if(!/아직 받아쓰기가 끝나지 않았습니다/.test(String(e.message)))throw e;
@@ -85,8 +129,37 @@ async function download(id){
   const meta=s.metadata[id]??{},course=safeName(meta.course||'과목 미지정'),title=safeName(r.title);
   const prefix=meta.week?`${meta.week}주차_`:'';
   if(typeof r.url!=='string'||!r.url.startsWith('blob:'+SELF.slice(0,-1)+'/'))throw new Error('다운로드 주소 오류');
-  const downloadId=await chrome.downloads.download({url:r.url,filename:`KLAS요약/${course}/${prefix}${title}.html`,conflictAction:'uniquify',saveAs:false});
-  return {downloadId};
+  const kind=item?'summary':'raw',hash=/^[0-9a-f]{64}$/.test(r.hash||'')?r.hash:null;
+  const previous=(await state()).statuses[id]?.localDownloads?.[kind];
+  if(hash&&previous?.hash===hash&&chrome.downloads.search){
+    let found;try{[found]=await chrome.downloads.search({id:previous.downloadId});}catch{}
+    if(found&&(found.state==='in_progress'||found.state==='complete'&&found.exists===true)){
+      await updateLocalDownload(found.id,found.state,found.exists);
+      if(previous.outdated)await mutate(s=>{const record=s.statuses[id]?.localDownloads?.[kind];if(record?.downloadId===found.id)record.outdated=false;});
+      if(found.state==='complete')try{await chrome.downloads.show?.(found.id);}catch{}
+      return {downloadId:found.id,reused:true,downloadState:found.state,backupQueued:false,backupError:null};
+    }
+    if(found)await updateLocalDownload(found.id,found.state,found.exists);
+  }
+  const filename=`KLAS요약/${course}/${prefix}${title}_${kind==='summary'?'요약':'원문'}.html`;
+  const downloadId=await chrome.downloads.download({url:r.url,filename,conflictAction:'uniquify',saveAs:false});
+  await mutate(s=>{
+    const status=s.statuses[id]??={};
+    status.localDownloads={...status.localDownloads,[kind]:{downloadId,hash,state:'in_progress',filename,startedAt:Date.now()}};
+  });
+  // Completion can race the storage write, so also inspect the current download.
+  if(chrome.downloads.search)try{
+    const [found]=await chrome.downloads.search({id:downloadId});
+    if(found)await updateLocalDownload(downloadId,found.state,found.exists);
+  }catch{}
+  // Backup errors are separate from the local save and never turn a saved note into an AI error.
+  if(!item)await patch(id,{reportCreatedAt:createdAt}).catch(()=>{});
+  let backupQueued=false,backupError=null;
+  if(s.settings.driveBackup){
+    try{const response=await fetch(r.url);if(!response.ok)throw Error('HTML을 읽지 못했어요.');backupQueued=await drive.stage({blob:await response.blob(),downloadId,contentId:id,kind:item?'summary':'raw',course,filename:`${prefix}${title}${item?'_요약':'_원문'}.html`});}
+    catch{backupError='HTML 다운로드는 시작됐어요. Drive 백업은 실패했습니다. HTML을 다시 받아주세요.';}
+  }
+  return {downloadId,reused:false,downloadState:(await state()).statuses[id]?.localDownloads?.[kind]?.state,backupQueued,backupError};
 }
 async function enqueue(id,{auto=false,force=false}={}){
   const s=await allowed(id);deleted.delete(id);
@@ -144,6 +217,8 @@ async function summarize(id,requestId){
     if(deleted.has(id)||!latest.settings.consent||latest.settings.mode!=='ai')throw new Error('작업이 취소되어 결과를 저장하지 않았습니다.');
     const aiLabel=ticket.provider==='codex'?`Codex · ${s.settings.codexModel}`:`Claude · ${s.settings.claudeModel}`;
     await engine('saveSummary',{contentId:id,item:{contentId:id,summary,summaryFormat:SUMMARY_FORMAT,provider:ticket.provider,aiLabel,createdAt:Date.now(),usage:response.usage,rawText:String(response.text||'').slice(0,400000)}});
+    await mutate(s=>{const prior=s.statuses[id]?.localDownloads?.summary;if(prior)prior.outdated=true;});
+    await drive.markOutdated(id,'summary').catch(()=>{});
     const r=await download(id);await patch(id,{state:'complete',step:'개인 요약 HTML 저장 완료',usage:response.usage,error:null});return r;
   }catch(e){if(!deleted.has(id))await patch(id,{state:'error',step:'요약 오류 · 받아쓰기 원문 HTML은 받을 수 있어요',error:friendlyError(e.message||e),...(ticketOk?{transcribed:true}:{})});throw e;}finally{active.delete(id);nativeJobs.delete(id);}
 }
@@ -156,10 +231,16 @@ async function afterTranscription(id){
 }
 // '지금 요약'·'다시 시도': 받아쓰기가 아직이면 확인 화면 없이 처리만 시작한다. 끝나면 목록·패널에 '확인하고 저장'이 뜬다.
 // 요약 노트는 완료된 강의를 사용자가 선택할 때만 만든다.
-async function startProcessing(id){
+function startProcessing(id){
+  if(processingTasks.has(id))return processingTasks.get(id);
+  const task=beginProcessing(id).finally(()=>processingTasks.delete(id));
+  processingTasks.set(id,task);return task;
+}
+async function beginProcessing(id){
   const s=await state();
   if(!s.settings.consent){await chrome.tabs.create({url:SELF+'consent.html'});throw new Error('처음 실행 안내를 확인한 뒤 다시 눌러 주세요.');}
   if(['queued','running','summarizing'].includes(s.statuses[id]?.state))return {pending:true};
+  if(canDownload(s.statuses[id]))return {ready:true};
   return enqueue(id,{auto:true});
 }
 async function openConfirm(id,force=false,sender){
@@ -172,16 +253,17 @@ async function openConfirm(id,force=false,sender){
   const tabs=await chrome.tabs.create({url:`${SELF}confirm.html?id=${id}${force?'&force=1':''}`});return {tabId:tabs.id};
 }
 const uiHandlers={
-  getState:state,
-  async saveSettings(m){const s=await mutate(s=>{s.settings=cleanSettings(m.settings,s.settings);});if(m.settings?.asrConsent===false)await pauseAudioQueue();return {settings:s.settings};},
+  getState:publicState,
+  async saveSettings(m){if(Object.hasOwn(m.settings??{},'driveBackup'))throw new Error('Drive 백업은 설정 화면에서 따로 변경하세요.');const s=await mutate(s=>{s.settings=cleanSettings(m.settings,s.settings);});if(m.settings?.asrConsent===false)await pauseAudioQueue();return {settings:s.settings};},
   async setConsent(m){if(!['local','ai'].includes(m.mode))throw new Error('처리 모드 오류');const s=await mutate(s=>{s.settings={...s.settings,consent:true,mode:m.mode,asrConsent:m.asrConsent===true};});return {settings:s.settings};},
   detect:()=>nativeCall({cmd:'detect'}),
   async test(){const s=await state();if(!s.settings.consent||s.settings.mode!=='ai')throw new Error('AI 모드 동의 후 연결 테스트가 가능합니다.');const provider=await chooseProvider(s.settings);return nativeCall({cmd:'test',provider,model:modelFor(provider,s.settings)});},
   codexModels:()=>nativeCall({cmd:'codexModels'}),
   async getLibrary(){const [items,summaries]=await Promise.all([store.allLectures(),store.allSummaries()]);return {items,summaries:Object.fromEntries(summaries.map(x=>[x.contentId,{createdAt:x.createdAt,aiLabel:x.aiLabel}]))};},
-  async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
+  async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');await drive.forgetLecture(id);const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}asrJobs.get(id)?.abort();const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
   download:m=>download(requiredId(m.contentId)),
+  async retryDrive(m){await allowed(requiredId(m.contentId));const s=await state(),view=await drive.view(s.settings.mode==='local'?'raw':'summary');await drive.retry(requiredId(m.contentId),view.backups[m.contentId]?.kind);return {};},
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),
   prepareNote:m=>prepare(requiredId(m.contentId),false,{note:true}),
   summarize:m=>summarize(requiredId(m.contentId),m.requestId),
@@ -229,23 +311,43 @@ export async function route(m,sender){
     if(p.progress!==undefined)p.progress=Math.max(0,Math.min(1,Number(p.progress)||0));
     if(p.title)p.title=String(p.title).slice(0,200);if(p.step)p.step=String(p.step).slice(0,500);
     // 받아쓰기 완료 여부를 남겨, 이후 요약이 실패해도 원문 HTML을 받을 수 있게 한다.
-    if(p.state==='done')p.transcribed=true;else if(p.state==='running')p.transcribed=false;
+    if(p.state==='done')p.transcribed=true;else if(p.state==='running'){
+      p.transcribed=false;const previous=await state();
+      if(previous.statuses[id]?.state!=='running'){
+        p.reportCreatedAt=null;
+        await mutate(s=>{for(const record of Object.values(s.statuses[id]?.localDownloads||{}))record.outdated=true;});
+        await drive.markOutdated(id).catch(()=>{});
+      }
+    }
     await patch(id,p);if(p.state==='done')afterTranscription(id).catch(e=>patch(id,{state:'error',error:String(e.message||e),intent:null}));return {};
   }
   if(role==='ui'){
+    if(['driveStatus','connectDrive','disconnectDrive','setDriveBackup','refreshDrive'].includes(m.type)){
+      if(new URL(sender.url).pathname!=='/options.html')throw new Error('Drive 연결은 설정 화면에서만 관리할 수 있습니다.');
+      if(m.type==='driveStatus')return drive.view('summary',true);
+      if(m.type==='connectDrive'){if(!(await state()).settings.consent)throw new Error('먼저 데이터 처리 안내를 확인하세요.');return drive.connect();}
+      if(m.type==='disconnectDrive'){await mutate(s=>{s.settings.driveBackup=false;});await drive.disconnect();return {};}
+      if(m.type==='setDriveBackup'){
+        if(typeof m.enabled!=='boolean')throw new Error('백업 설정 값 오류');
+        if(m.enabled){const s=await state(),d=await drive.view();if(!s.settings.consent||!d.connected)throw new Error('Google 계정을 연결한 뒤 백업을 켜 주세요.');}
+        await mutate(s=>{s.settings.driveBackup=m.enabled;});if(!m.enabled)drive.stop();else void drive.recover().catch(()=>{});return {};
+      }
+      await drive.refresh();return {};
+    }
     if(['groqStatus','saveGroqKey','removeGroqKey','testGroq'].includes(m.type)){
       if(new URL(sender.url).pathname!=='/options.html')throw new Error('Groq 키는 설정 화면에서만 관리할 수 있습니다.');
       if(m.type==='groqStatus')return nativeCall({cmd:'groqStatus'});
       if(m.type==='removeGroqKey'){await pauseAudioQueue();return nativeCall({cmd:'groqRemoveKey'});}
       if(m.type==='saveGroqKey')return nativeCall({cmd:'groqSaveKey',apiKey:m.apiKey});
       const r=await nativeCall({cmd:'groqTest'});
-      if((await state()).settings.asrConsent)await engine('resumeQueue');
+      if((await state()).settings.asrConsent)try{await engine('resumeQueue');}
+      catch{return {...r,queueResumed:false,queueResumeError:'Groq 연결은 성공했지만 로컬 대기열을 재개하지 못했어요. 확장을 새로고침한 뒤 다시 시도하세요.'};}
       return r;
     }
     if(!Object.hasOwn(uiHandlers,m.type))throw new Error('알 수 없는 요청');return uiHandlers[m.type](m,sender);
   }
   if(role==='list'){
-    if(m.type==='getState')return state();
+    if(m.type==='getState')return publicState();
     if(m.type==='registerLectures'){
       if(!Array.isArray(m.items)||m.items.length>1000)throw new Error('강의 목록 오류');
       // KLAS 진도가 0%보다 큰 강의는 학생이 이미 연 강의로 인정한다(설치 전에 다 들은 강의도 다시 열 필요 없음).
@@ -260,6 +362,7 @@ export async function route(m,sender){
     }
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
     if(m.type==='startProcessing')return startProcessing(id);
+    if(m.type==='retryDrive'){await allowed(id);const s=await state(),view=await drive.view(s.settings.mode==='local'?'raw':'summary');await drive.retry(id,view.backups[id]?.kind);return {};}
     // 목록의 'HTML 받기': 받아쓰기가 끝난 강의를 저장된 결과로 만든다(AI 호출 없음). 요약 전이면 원문만 담긴다.
     if(m.type==='download'){const s=await state();if(!canDownload(s.statuses[id]))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return download(id);}
     throw new Error('목록에서 허용되지 않은 요청');

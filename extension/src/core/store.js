@@ -1,4 +1,4 @@
-// 모든 강의 데이터는 이 PC의 브라우저 저장소(IndexedDB)에만 둔다. 외부로 보내지 않는다.
+// 강의 원본은 이 PC에 둔다. Drive 백업을 켠 경우에만 완성된 HTML을 업로드한다.
 // lectures: 강의 정보와 진행 상태 / segments: 받아쓴 문장 / slides: 슬라이드 이미지 / summaries: AI 요약 결과
 
 const DB = 'klas-summarizer';
@@ -7,13 +7,16 @@ let dbp = null;
 function open() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB, 1);
+    const r = indexedDB.open(DB, 2);
     r.onupgradeneeded = () => {
       const db = r.result;
-      db.createObjectStore('lectures', { keyPath: 'contentId' });
-      db.createObjectStore('segments', { keyPath: ['contentId', 'start'] }).createIndex('byLecture', 'contentId');
-      db.createObjectStore('slides', { keyPath: ['contentId', 'start'] }).createIndex('byLecture', 'contentId');
-      db.createObjectStore('summaries', { keyPath: 'contentId' });
+      if (!db.objectStoreNames.contains('lectures')) {
+        db.createObjectStore('lectures', { keyPath: 'contentId' });
+        db.createObjectStore('segments', { keyPath: ['contentId', 'start'] }).createIndex('byLecture', 'contentId');
+        db.createObjectStore('slides', { keyPath: ['contentId', 'start'] }).createIndex('byLecture', 'contentId');
+        db.createObjectStore('summaries', { keyPath: 'contentId' });
+      }
+      if (!db.objectStoreNames.contains('driveJobs')) db.createObjectStore('driveJobs', { keyPath: 'jobId' });
     };
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -42,6 +45,15 @@ export async function putMany(store, values) {
   const tx = db.transaction(store, 'readwrite');
   for (const v of values) tx.objectStore(store).put(v);
   return txDone(tx);
+}
+
+export async function driveJobs() {
+  const db = await open();
+  return done(db.transaction('driveJobs').objectStore('driveJobs').getAll());
+}
+export async function removeDriveJob(jobId) {
+  const db = await open(), tx = db.transaction('driveJobs', 'readwrite');
+  await Promise.all([done(tx.objectStore('driveJobs').delete(jobId)), txDone(tx)]);
 }
 
 export async function byLecture(store, contentId) {

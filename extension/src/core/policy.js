@@ -1,5 +1,5 @@
 export const ID_RE = /^[0-9a-f]{8,32}$/i;
-export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'claude-opus-5-5', codexModel:'gpt-6-sol', preset:'standard', confirmBeforeSend:true, asrConsent:false, motion:true});
+export const DEFAULT_SETTINGS = Object.freeze({consent:false, mode:'local', provider:'auto', claudeModel:'claude-opus-5-5', codexModel:'gpt-6-sol', preset:'standard', confirmBeforeSend:true, asrConsent:false, motion:true, driveBackup:false});
 export const CODEX_MODEL_RE = /^[a-z0-9][a-z0-9.\-]{1,40}$/;
 export const validId = id => typeof id === 'string' && ID_RE.test(id);
 export function cleanSettings(input, previous = DEFAULT_SETTINGS) {
@@ -15,7 +15,7 @@ export function cleanSettings(input, previous = DEFAULT_SETTINGS) {
     if (typeof input.codexModel !== 'string' || !CODEX_MODEL_RE.test(input.codexModel)) throw new Error('설정 값 오류: codexModel');
     result.codexModel=input.codexModel;
   }
-  for (const key of ['confirmBeforeSend','motion','asrConsent']) if (Object.hasOwn(input??{},key)) {
+  for (const key of ['confirmBeforeSend','motion','asrConsent','driveBackup']) if (Object.hasOwn(input??{},key)) {
     if (typeof input[key] !== 'boolean') throw new Error(`설정 값 오류: ${key}`);
     result[key]=input[key];
   }

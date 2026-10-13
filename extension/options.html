@@ -28,6 +28,7 @@
       <label class="check"><input id="asrConsent" type="checkbox" /> 강의 음성을 Groq로 보내 받아쓰는 데 동의합니다.</label>
       <div class="actions-row"><button id="saveGroqKey" class="btn btn--primary" type="button">키·동의 저장</button><button id="testGroq" class="btn btn--ghost" type="button">연결 테스트·대기 재개</button><button id="removeGroqKey" class="btn btn--ghost" type="button">키 삭제</button></div>
       <p id="groqState" class="hint" role="status" aria-live="polite"></p>
+      <p class="hint">새 키를 입력하고 연결 테스트를 누르면 그 키를 먼저 저장한 뒤 확인합니다. 음성 전송 동의는 ‘키·동의 저장’으로 별도 저장하세요. 연결 프로그램 오류가 나면 설치 폴더의 진단 도구로 설치 상태를 확인할 수 있습니다.</p>
       <p class="hint">무료 한도는 조직별로 적용됩니다. 현재 공개 기본 한도는 음성 2시간/시간, 8시간/일이며 계정의 실제 한도가 우선합니다. 한도 초과 시 대기열을 유지하고 재개합니다. 연결 테스트는 모델 목록만 확인하며 음성을 전송하지 않습니다.</p>
     </section>
     <section class="card" aria-labelledby="ai-h">
@@ -90,6 +91,21 @@
       <p id="saveResult" class="hint" aria-live="polite"></p>
     </section>
 
+    <section class="card" aria-labelledby="drive-h">
+      <h2 id="drive-h">Google Drive 백업 <small class="hint">선택</small></h2>
+      <p class="hint">켜면 HTML 다운로드가 끝난 뒤 같은 파일을 내 Drive의 KLAS요약 폴더에 백업해요. 대본·슬라이드가 포함된 HTML이 Google로 전송됩니다. 연결하지 않아도 다운로드할 수 있어요.</p>
+      <p id="driveAccount" class="hint" role="status">연결 안 됨</p>
+      <div class="field-row">
+        <button type="button" id="connectDrive" class="btn btn--ghost btn--sm">Google 계정 연결</button>
+        <button type="button" id="disconnectDrive" class="btn btn--ghost btn--sm" hidden>연결 해제</button>
+        <button type="button" id="refreshDrive" class="btn btn--ghost btn--sm" hidden>백업 상태 확인</button>
+      </div>
+      <label class="check"><input type="checkbox" id="driveBackup" disabled /> HTML 다운로드 시 자동 백업</label>
+      <p id="driveResult" class="hint" aria-live="polite"></p>
+      <p id="driveSetup" class="hint" hidden>Google Drive 연결이 준비된 설치본으로 업데이트하면 계정을 연결할 수 있어요. HTML 다운로드는 그대로 사용할 수 있습니다.</p>
+      <p class="hint">연결 해제·로컬 기록 삭제 시 Drive 백업은 남아요. 공개 공유 링크는 만들지 않습니다.</p>
+    </section>
+
     <section class="card" aria-labelledby="privacy-h">
       <h2 id="privacy-h">개인정보</h2>
       <p id="consentState" class="hint"></p>
@@ -131,6 +147,8 @@
   </form>
 </dialog>
 
+<script src="drive-badge.js"></script>
+<script src="local-report-ui.js"></script>
 <script type="module" src="options.js"></script>
 </body>
 </html>
