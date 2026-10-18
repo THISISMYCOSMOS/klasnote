@@ -50,6 +50,17 @@
     <p id="emptyMsg" class="sp-empty" hidden></p>
   </section>
 </div>
+
+<dialog id="confirmDialog" class="confirm-dialog">
+  <form method="dialog">
+    <h2 id="confirmDialogTitle">확인</h2>
+    <p id="confirmDialogMsg"></p>
+    <div class="dialog-actions">
+      <button type="submit" value="cancel" class="btn btn--ghost btn--sm">취소</button>
+      <button type="submit" value="ok" class="btn btn--danger btn--sm">삭제</button>
+    </div>
+  </form>
+</dialog>
 <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@
 > **비공식 개인 복습용 도구예요.** 학교와 관계없고, 출석·진도·인증에는 손대지 않아요.
 > 쓰기 전에 **[사용 금지 사항](#9-사용-금지-사항-꼭-읽어-주세요)** 을 꼭 읽어 주세요. 사용하면 동의한 것으로 봐요.
 
-### [⬇ 설치 파일 받기 — klasnote-0.1.6.zip (Windows · Mac 공용)](downloads/klasnote-0.1.6.zip?raw=true)
+### [⬇ 설치 파일 받기 — klasnote-0.1.7.zip (Windows · Mac 공용)](downloads/klasnote-0.1.7.zip?raw=true)
 
 ### [▶ 설치·사용 설명 영상 (YouTube)](https://youtu.be/uhqojIw3CjQ)
 

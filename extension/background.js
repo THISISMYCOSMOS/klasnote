@@ -1,4 +1,4 @@
-import {DEFAULT_SETTINGS,validId,cleanSettings,cleanMeta,safeName,classifySender,parseSummary,checkPayload} from './src/core/policy.js';
+import {DEFAULT_SETTINGS,validId,cleanSettings,cleanMeta,safeName,classifySender,parseSummary,checkPayload,hostUpdateHint} from './src/core/policy.js';
 import * as store from './src/core/store.js';
 import {SUMMARY_FORMAT} from './src/core/pack.js';
 
@@ -9,7 +9,21 @@ const active=new Set(), deleted=new Set();
 const nativeJobs=new Map(),asrJobs=new Map();
 const lastOpened=new Map(); // 강의 열림 이벤트 중복 방지(두 플레이어 프레임·빠른 재열기)
 async function state(){const s=await chrome.storage.local.get(['settings','statuses','opened','metadata']);return {settings:cleanSettings({},s.settings),statuses:s.statuses??{},opened:s.opened??{},metadata:s.metadata??{}};}
-function mutate(fn){const p=storageTail.then(async()=>{const s=await state();await fn(s);await chrome.storage.local.set(s);chrome.runtime.sendMessage({target:'ui',type:'stateChanged'}).catch(()=>{});return s;});storageTail=p.catch(()=>{});return p;}
+function mutate(fn){const p=storageTail.then(async()=>{const s=await state();await fn(s);await chrome.storage.local.set(s);updateBadge(s);chrome.runtime.sendMessage({target:'ui',type:'stateChanged'}).catch(()=>{});return s;});storageTail=p.catch(()=>{});return p;}
+// 확장 아이콘에 '확인 필요' 강의 수를 띄운다. KLAS 화면을 보고 있지 않아도 처리가 끝난 걸 알 수 있다.
+function updateBadge(s){
+  if(!chrome.action?.setBadgeText)return;
+  const n=Object.values(s.statuses).filter(st=>needsReview(st)).length;
+  chrome.action.setBadgeText({text:n?String(Math.min(n,99)):''}).catch(()=>{});
+  chrome.action.setBadgeBackgroundColor?.({color:'#8b1d3f'})?.catch?.(()=>{});
+  chrome.action.setTitle?.({title:n?`klasnote · 확인 필요 ${n}개`:'klasnote 패널 열기'})?.catch?.(()=>{});
+}
+// 받아쓰기 대기열의 실제 순서(처리 중 → 대기). 화면에 '대기 2번째'를 보여 주는 데 쓴다.
+async function queueOrder(){
+  const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});
+  if(!contexts.length)return [];
+  try{const r=await rawEngine('jobs');return [r.running,...(r.queued||[])].filter(Boolean);}catch{return [];}
+}
 async function patch(id,p){await mutate(s=>{s.statuses[id]={...s.statuses[id],...p,updatedAt:Date.now()};});}
 function requiredId(id){if(!validId(id))throw new Error('올바르지 않은 강의 ID');return id.toLowerCase();}
 async function allowed(id){const s=await state();if(!s.settings.consent)throw new Error('먼저 데이터 처리 안내를 확인하세요.');if(!s.opened[id])throw new Error('이 강의를 한 번 열어 본 뒤 사용할 수 있습니다.');return s;}
@@ -25,7 +39,7 @@ export function nativeCall(message,{signal}={}){
       if(signal?.aborted){abort();return;}
       signal?.addEventListener('abort',abort,{once:true});
       port=chrome.runtime.connectNative(HOST);
-      port.onMessage.addListener(response=>response?.ok?finish(null,response):finish(Object.assign(new Error(response?.error||'네이티브 호스트 오류'),{code:response?.code,retryAt:response?.retryAt})));
+      port.onMessage.addListener(response=>response?.ok?finish(null,response):finish(Object.assign(new Error(response?.error||'네이티브 호스트 오류'),{code:response?.code,retryAt:response?.retryAt,hostVersion:response?.hostVersion})));
       port.onDisconnect.addListener(()=>{const e=chrome.runtime.lastError;finish(new Error(e?.message||'네이티브 호스트 연결이 끊겼습니다. 설치 상태를 확인하세요.'));});
       port.postMessage(message);
     }catch(e){finish(e);}
@@ -86,7 +100,16 @@ async function download(id){
   const prefix=meta.week?`${meta.week}주차_`:'';
   if(typeof r.url!=='string'||!r.url.startsWith('blob:'+SELF.slice(0,-1)+'/'))throw new Error('다운로드 주소 오류');
   const downloadId=await chrome.downloads.download({url:r.url,filename:`KLAS요약/${course}/${prefix}${title}.html`,conflictAction:'uniquify',saveAs:false});
+  await patch(id,{downloadId});
   return {downloadId};
+}
+// 마지막으로 받은 HTML을 파일 탐색기(Finder)에서 보여 준다. 파일을 옮기거나 지웠으면 다시 받으라고 안내한다.
+async function showDownload(id){
+  const d=(await state()).statuses[id]?.downloadId;
+  if(!Number.isInteger(d))throw new Error('받은 HTML이 없어요. 먼저 HTML을 받으세요.');
+  const [item]=await chrome.downloads.search({id:d});
+  if(!item?.exists||item.state!=='complete')throw new Error('파일을 찾지 못했어요. 옮기거나 지웠다면 HTML을 다시 받으세요.');
+  chrome.downloads.show(d);return {};
 }
 // 목록의 'HTML 받기'로 원문을 받은 '확인 필요' 강의는 저장된 것으로 보고 확인 필요에서 뺀다(요약은 계속 가능).
 const READY=new Set(['done','awaiting_confirmation']);
@@ -160,7 +183,7 @@ async function afterTranscription(id){
   if(!intent||!s.settings.consent||!s.opened[id]||active.has(id)||deleted.has(id))return;
   if(intent.settingsKey!==settingsKey(s.settings)){await patch(id,{intent:null,state:'done',step:'설정 변경됨 · 수동 실행 가능'});return;}
   // 받아쓰기 완료만으로 요약·HTML 생성·CLI 감지를 시작하지 않는다. 사용자가 강의를 선택한 뒤 prepare/summarize한다.
-  await patch(id,{intent:null,ticket:null,state:'done',step:'받아쓰기 완료 · 선택하면 요약 노트를 만들어요'});
+  await patch(id,{intent:null,ticket:null,state:'done',step:'받아쓰기 완료'});
 }
 // '지금 요약'·'다시 시도': 받아쓰기가 아직이면 확인 화면 없이 처리만 시작한다. 끝나면 목록·패널에 '확인하고 저장'이 뜬다.
 // 요약 노트는 완료된 강의를 사용자가 선택할 때만 만든다.
@@ -175,12 +198,14 @@ async function openConfirm(id,force=false,sender){
   const opening=chrome.sidePanel&&sender?.tab?chrome.sidePanel.open({tabId:sender.tab.id}).then(()=>true,()=>false):Promise.resolve(false);
   await allowed(id);
   if(chrome.sidePanel&&(await opening||sender?.url?.startsWith(SELF+'sidepanel.html'))){
-    try{const path=`confirm.html?id=${id}&panel=1${force?'&force=1':''}`;await chrome.sidePanel.setOptions(sender?.tab?{tabId:sender.tab.id,path}:{path});return {panel:true};}catch{}
+    // 탭별 패널로 열었으면 탭 번호를 넘긴다. 되돌아갈 때도 그 탭의 경로를 바꿔야 한다(전역 경로보다 탭 경로가 우선).
+    try{const path=`confirm.html?id=${id}&panel=1${force?'&force=1':''}${sender?.tab?`&tab=${sender.tab.id}`:''}`;await chrome.sidePanel.setOptions(sender?.tab?{tabId:sender.tab.id,path}:{path});return {panel:true};}catch{}
   }
   const tabs=await chrome.tabs.create({url:`${SELF}confirm.html?id=${id}${force?'&force=1':''}`});return {tabId:tabs.id};
 }
 const uiHandlers={
-  getState:state,
+  async getState(){return {...await state(),queue:await queueOrder()};},
+  showDownload:m=>showDownload(requiredId(m.contentId)),
   async saveSettings(m){const s=await mutate(s=>{s.settings=cleanSettings(m.settings,s.settings);});if(m.settings?.asrConsent===false)await pauseAudioQueue();return {settings:s.settings};},
   async setConsent(m){if(!['local','ai'].includes(m.mode))throw new Error('처리 모드 오류');const s=await mutate(s=>{s.settings={...s.settings,consent:true,mode:m.mode,asrConsent:m.asrConsent===true};});return {settings:s.settings};},
   detect:()=>nativeCall({cmd:'detect'}),
@@ -197,7 +222,7 @@ const uiHandlers={
   startProcessing:m=>startProcessing(requiredId(m.contentId)),
   async openOptions(){await chrome.runtime.openOptionsPage();return {};},
   async openConsent(){await chrome.tabs.create({url:SELF+'consent.html'});return {};},
-  async resetPanel(){await chrome.sidePanel.setOptions({path:'sidepanel.html'});return {};},
+  async resetPanel(m){const tabId=Number.isInteger(m.tabId)&&m.tabId>=0?m.tabId:null;await chrome.sidePanel.setOptions(tabId===null?{path:'sidepanel.html'}:{tabId,path:'sidepanel.html'});return {};},
 };
 export async function route(m,sender){
   const role=classifySender(sender,SELF,chrome.runtime.id);if(!role)throw new Error('허용되지 않은 메시지 발신자');
@@ -225,6 +250,8 @@ export async function route(m,sender){
         if(!s.settings.asrConsent)throw new Error('Groq 음성 전송 동의가 필요합니다.');
         return await nativeCall({cmd:'transcribeGroq',audioB64:m.audioB64,offset:m.offset,duration:m.duration},{signal:controller.signal});
       }
+      // 받아쓰기 응답 검사는 연결 프로그램 쪽에 있다. 옛 호스트가 남아 있으면 그 안내를 붙인다.
+      catch(e){if(e?.code==='GROQ_RESPONSE')e.message=hostUpdateHint(e.message,e.hostVersion,chrome.runtime.getManifest?.().version);throw e;}
       finally{if(asrJobs.get(id)===controller)asrJobs.delete(id);}
     }
     if(m.type!=='status'||!validId(m.contentId))throw new Error('처리 상태 메시지 오류');
@@ -238,7 +265,12 @@ export async function route(m,sender){
     if(p.title)p.title=String(p.title).slice(0,200);if(p.step)p.step=String(p.step).slice(0,500);
     // 받아쓰기 완료 여부를 남겨, 이후 요약이 실패해도 원문 HTML을 받을 수 있게 한다.
     if(p.state==='done')p.transcribed=true;else if(p.state==='running'){p.transcribed=false;p.rawSaved=false;}
-    await patch(id,p);if(p.state==='done')afterTranscription(id).catch(e=>patch(id,{state:'error',error:String(e.message||e),intent:null}));return {};
+    // 대기에 들어간 시각과 이번 처리의 시작 시각·진행률을 남겨 화면에서 남은 시간을 어림한다.
+    await mutate(s=>{const prev=s.statuses[id]??{},now=Date.now(),extra={};
+      if(p.state==='queued'&&prev.state!=='queued')extra.queuedAt=now;
+      if(p.state==='running'&&prev.state!=='running'){extra.runStartedAt=now;extra.runStartProgress=p.progress??prev.progress??0;}
+      s.statuses[id]={...prev,...p,...extra,updatedAt:now};});
+    if(p.state==='done')afterTranscription(id).catch(e=>patch(id,{state:'error',error:String(e.message||e),intent:null}));return {};
   }
   if(role==='ui'){
     if(['groqStatus','saveGroqKey','removeGroqKey','testGroq'].includes(m.type)){
@@ -253,7 +285,7 @@ export async function route(m,sender){
     if(!Object.hasOwn(uiHandlers,m.type))throw new Error('알 수 없는 요청');return uiHandlers[m.type](m,sender);
   }
   if(role==='list'){
-    if(m.type==='getState')return state();
+    if(m.type==='getState')return {...await state(),queue:await queueOrder()};
     if(m.type==='registerLectures'){
       if(!Array.isArray(m.items)||m.items.length>1000)throw new Error('강의 목록 오류');
       // KLAS 진도가 0%보다 큰 강의는 학생이 이미 연 강의로 인정한다(설치 전에 다 들은 강의도 다시 열 필요 없음).
@@ -269,6 +301,7 @@ export async function route(m,sender){
     if(m.type==='manualSummary')return openConfirm(id,false,sender);
     if(m.type==='startProcessing')return startProcessing(id);
     // 목록의 'HTML 받기': 받아쓰기가 끝난 강의를 저장된 결과로 만든다(AI 호출 없음). 요약 전이면 원문만 담긴다.
+    if(m.type==='showDownload')return showDownload(id);
     if(m.type==='download'){const s=await state();if(!canDownload(s.statuses[id]))throw new Error('받아쓰기가 끝난 강의만 받을 수 있습니다.');return downloadFromList(id);}
     throw new Error('목록에서 허용되지 않은 요청');
   }

@@ -25,8 +25,8 @@ globalThis.chrome={
   downloads:{download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;return downloads;}},
   offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},tabs:{create:async()=>({id:2})}
 };
-let panelPaths=[];
-chrome.sidePanel={setPanelBehavior:async()=>{},open:async options=>{panelOpens.push(options);},setOptions:async options=>{panelPaths.push(options.path);}};
+let panelPaths=[],panelCalls=[];
+chrome.sidePanel={setPanelBehavior:async()=>{},open:async options=>{panelOpens.push(options);},setOptions:async options=>{panelPaths.push(options.path);panelCalls.push(options);}};
 const {route,friendlyError}=await import('../extension/background.js');
 const send=(type,extra={})=>route({type,...extra},ui);
 
@@ -60,9 +60,12 @@ test('manual row and sidebar actions review in the panel without invoking the en
   const listSender={id:ext,url:'https://klas.kw.ac.kr/std/lis/evltn/OnlineCntntsStdPage.do',tab:{id:27}};
   const row=await route({type:'manualSummary',contentId:id},listSender);assert.equal(row.panel,true);
   const pane=await route({type:'openConfirm',contentId:id},{id:ext,url:self+'sidepanel.html'});assert.equal(pane.panel,true);
-  assert.equal(panelPaths.length,2);assert.match(panelPaths[0],/confirm\.html\?id=0123456789abcdef&panel=1$/);
+  assert.equal(panelPaths.length,2);assert.match(panelPaths[0],/confirm\.html\?id=0123456789abcdef&panel=1&tab=27$/);assert.match(panelPaths[1],/&panel=1$/);
   assert.equal(engineCount,0);assert.equal(nativeCount,0);
   delete data.opened[id];await assert.rejects(route({type:'manualSummary',contentId:id},listSender),/열어/);assert.equal(panelPaths.length,2);
+  // 탭별 패널로 연 확인 화면은 그 탭의 경로를 목록으로 되돌린다(전역 경로만 바꾸면 탭 경로가 이겨 버튼이 먹지 않았다).
+  panelCalls=[];await route({type:'resetPanel',tabId:27},{id:ext,url:self+'confirm.html?id='+id+'&panel=1&tab=27'});assert.deepEqual(panelCalls,[{tabId:27,path:'sidepanel.html'}]);
+  panelCalls=[];await route({type:'resetPanel',tabId:'27'},{id:ext,url:self+'confirm.html?id='+id+'&panel=1'});assert.deepEqual(panelCalls,[{path:'sidepanel.html'}]);
 });
 test('Windows output filenames and settings cannot bypass consent',()=>{
   assert.equal(safeName('../CON'),'.._CON');assert.equal(safeName('CON.txt'),'_CON.txt');assert.equal(safeName('..'),'강의');
@@ -265,4 +268,27 @@ test('a rejected summary ticket does not mark the lecture as transcribed',async(
  reset();data.statuses[id]={state:'running',transcribed:false};
  await assert.rejects(send('summarize',{contentId:id,requestId:'stale'}),/만료/);
  assert.equal(data.statuses[id].state,'error');assert.equal(data.statuses[id].transcribed,false);
+});
+
+test('queue timing, the toolbar badge and "open folder" follow the lecture status',async()=>{
+ reset();
+ const badge=[],shown=[];let exists=true;
+ chrome.action={setBadgeText:async o=>{badge.push(o.text);},setBadgeBackgroundColor:async()=>{},setTitle:async()=>{}};
+ chrome.downloads.search=async q=>[{id:q.id,exists,state:'complete'}];chrome.downloads.show=d=>{shown.push(d);};
+ const engineSender={id:ext,url:self+'offscreen.html'};
+ try{
+  await route({type:'status',contentId:id,patch:{state:'queued'}},engineSender);
+  const queuedAt=data.statuses[id].queuedAt;assert.ok(Number.isFinite(queuedAt));
+  await route({type:'status',contentId:id,patch:{state:'running',progress:0.2}},engineSender);
+  const started=data.statuses[id].runStartedAt;assert.ok(Number.isFinite(started));assert.equal(data.statuses[id].runStartProgress,0.2);
+  await route({type:'status',contentId:id,patch:{state:'running',progress:0.5}},engineSender);
+  assert.equal(data.statuses[id].runStartedAt,started);assert.equal(data.statuses[id].runStartProgress,0.2);// 같은 처리 중에는 시작점을 유지
+  await route({type:'status',contentId:id,patch:{state:'done'}},engineSender);
+  assert.equal(badge.at(-1),'1');
+  await send('download',{contentId:id});
+  assert.equal(data.statuses[id].rawSaved,true);assert.equal(badge.at(-1),'');
+  const downloadId=data.statuses[id].downloadId;assert.ok(Number.isInteger(downloadId));
+  await send('showDownload',{contentId:id});assert.deepEqual(shown,[downloadId]);
+  exists=false;await assert.rejects(send('showDownload',{contentId:id}),/파일을 찾지 못했어요/);assert.deepEqual(shown,[downloadId]);
+ }finally{delete chrome.action;delete chrome.downloads.search;delete chrome.downloads.show;}
 });

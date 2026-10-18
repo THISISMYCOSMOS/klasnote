@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 
+// 이 연결 프로그램이 함께 설치된 확장 버전. 확장만 새로 받고 install을 다시 안 하면 옛 호스트가 남는데,
+// 응답마다 버전을 실어 보내 확장이 그걸 알아채게 한다. 설치 폴더(extension/ 옆)와 저장소(native-host/ 옆) 둘 다 찾는다.
+export const HOST_VERSION=(()=>{const here=dirname(fileURLToPath(import.meta.url));for(const p of [join(here,'extension','manifest.json'),join(here,'..','extension','manifest.json')]){try{const v=JSON.parse(readFileSync(p,'utf8')).version;if(typeof v==='string')return v;}catch{}}return null;})();
 const groqConfig=createGroqConfigStore({file:join(dirname(fileURLToPath(import.meta.url)),'groq-config.json')});
 const CLAUDE_MODELS = new Set(['haiku', 'sonnet', 'opus', 'claude-opus-5-5']);
 const CODEX_DEFAULT_MODEL = 'gpt-6-sol'; // 사용자가 요청한 요약용 기본값; 계정별 실행 가능 여부는 별도
@@ -47,7 +50,7 @@ function startNativeHost(){process.stdin.on('data', (d) => {
     buf = buf.subarray(4 + n);
     let msg;
     try { msg = JSON.parse(raw); } catch { send({ ok: false, error: 'bad json' }); continue; }
-    handle(msg).then(send, (e) => send({ ok: false, error: String(e?.message || e).slice(0, 2000), code:e?.code, retryAt:e?.retryAt }));
+    handle(msg).then((r) => send({ ...r, hostVersion: HOST_VERSION }), (e) => send({ ok: false, error: String(e?.message || e).slice(0, 2000), code:e?.code, retryAt:e?.retryAt, hostVersion: HOST_VERSION }));
   }
 });
 process.stdin.on('end', cleanupAndExit);

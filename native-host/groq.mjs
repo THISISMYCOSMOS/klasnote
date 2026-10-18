@@ -133,13 +133,18 @@ function parseSegments(result, offset, duration) {
     }
     // Silence is the only segment that may be discarded.
     if (!segment.text.trim()) continue;
-    const { start, end } = segment;
-    if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) ||
-        start < 0 || end < start || start < lastStart) {
+    const { start: rawStart, end: rawEnd } = segment;
+    if (typeof rawStart !== 'number' || typeof rawEnd !== 'number' || !Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) {
       // Timing numbers only (never transcript text) so a real failure can be diagnosed from the UI.
       const n = (value) => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : String(typeof value);
-      failure('GROQ_RESPONSE', `Groq 전사 구간 시간이 오디오 범위를 벗어났거나 잘못되었습니다. (${n(start)}~${n(end)}초 / 오디오 ${n(duration)}초)`);
+      failure('GROQ_RESPONSE', `Groq 전사 구간 시간이 오디오 범위를 벗어났거나 잘못되었습니다. (${n(rawStart)}~${n(rawEnd)}초 / 오디오 ${n(duration)}초)`);
     }
+    // One odd timestamp must not fail the whole lecture (it did for other users even after 0.1.6).
+    // Keep the text and repair the timing: a negative start becomes 0, a start before the previous one
+    // is moved up to it (starts stay in order for window.js), and an end before its start becomes start.
+    // A repaired zero-length line with text gets flagged by suspect.js (chars per second), not hidden.
+    const start = Math.max(rawStart, 0, lastStart);
+    const end = Math.max(rawEnd, start);
     // Whisper decodes 30s windows padded with silence. A segment starting at/after the real audio end
     // has no audio behind it (padding hallucination); an end may also run into the padding when the
     // chunk cuts mid-sentence, or equal its start. Keep the text and clamp the end into the audio.

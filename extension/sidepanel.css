@@ -189,6 +189,21 @@ html, body {
 .sp-mini-btn:focus-visible { outline: 2px solid var(--burgundy-deep); outline-offset: 2px; }
 .sp-mini-btn:disabled { background: #cbb; cursor: not-allowed; }
 
+/* 기록 삭제: 주 동작 버튼과 떨어진 줄에 작은 글자 버튼으로 둬서 잘못 누르기 어렵게 한다. */
+.sp-item__foot { display: flex; justify-content: flex-end; margin-top: 4px; }
+.sp-del-btn {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--danger);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.sp-del-btn:focus-visible { outline: 2px solid var(--danger); outline-offset: 2px; }
+.sp-del-btn:disabled { color: var(--ink-soft); text-decoration: none; cursor: not-allowed; }
+
 .sp-empty {
   font-size: 12px;
   color: var(--ink-soft);
@@ -201,3 +216,29 @@ html, body {
 .sp-item__live { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--paper-2, rgba(128,82,93,.08)); font-size: 11px; }
 .sp-item__live-head { color: var(--ink-soft); margin-bottom: 2px; }
 .sp-item__live-body { white-space: pre-line; line-height: 1.5; max-height: 4.5em; overflow: hidden; }
+
+/* 폴더 열기: 주 동작보다 약하게 */
+.sp-mini-btn--ghost { background: var(--bg); color: var(--burgundy-deep); border: 1px solid var(--border); }
+.sp-mini-btn--ghost:hover { background: var(--bg-off, #f4eef0); }
+
+/* 과목별 묶음 */
+.sp-group { list-style: none; }
+.sp-group > details > .sp-list { margin-top: 6px; }
+.sp-group__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--burgundy-deep);
+  padding: 4px 2px;
+}
+.sp-group__head:focus-visible { outline: 2px solid var(--burgundy-deep); outline-offset: 2px; }
+.sp-group__count { font-weight: 400; color: var(--ink-soft); }
+.sp-item__when { color: var(--burgundy-deep); }
+/* 접기·펼치기 표시 (flex로 기본 삼각형이 사라지므로 직접 그린다) */
+.sp-group__head::-webkit-details-marker { display: none; }
+.sp-group__head > span:first-child::before { content: '▸'; display: inline-block; width: 1em; color: var(--ink-soft); }
+.sp-group > details[open] > .sp-group__head > span:first-child::before { content: '▾'; }

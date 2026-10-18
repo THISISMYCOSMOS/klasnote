@@ -23,6 +23,9 @@ const contentId = (params.get('id') || '').trim();
 const force = params.get('force') === 'true' || params.get('force') === '1';
 const inPanel=params.get('panel')==='1';
 const noteOnly=params.get('note')==='1';
+// KLAS 목록에서 열면 탭별 패널이다. 목록으로 돌아갈 때 그 탭의 경로를 바꾼다.
+const panelTab=/^\d+$/.test(params.get('tab')||'')?Number(params.get('tab')):null;
+const panelOptions=()=>panelTab===null?{path:'sidepanel.html'}:{tabId:panelTab,path:'sidepanel.html'};
 
 let scene;
 let requestId = null;
@@ -173,7 +176,7 @@ function onCancel(e) {
   window.close();
 }
 async function returnToList(){
-  try{await chrome.sidePanel.setOptions({path:'sidepanel.html'});}catch{el('loadingMsg').textContent='목록을 열지 못했어요. 확장 아이콘으로 다시 열어주세요.';}
+  try{await chrome.sidePanel.setOptions(panelOptions());}catch{el('loadingMsg').textContent='목록을 열지 못했어요. 확장 아이콘으로 다시 열어주세요.';}
 }
 
 function init() {
@@ -211,7 +214,7 @@ function init() {
 
   window.addEventListener('pagehide', () => {
     // 패널을 X로 닫아도 다음에 열 때 지난 강의 확인 화면이 남지 않게 목록으로 되돌린다(독립 검토 F3).
-    if (inPanel) chrome.runtime.sendMessage({ target: 'bg', type: 'resetPanel' }).catch(() => {});
+    if (inPanel) chrome.runtime.sendMessage({ target: 'bg', type: 'resetPanel', ...(panelTab === null ? {} : { tabId: panelTab }) }).catch(() => {});
     destroyed = true;
     if (pendingPrepareTimer) { clearTimeout(pendingPrepareTimer); pendingPrepareTimer = null; }
     scene?.destroy();

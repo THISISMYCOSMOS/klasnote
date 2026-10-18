@@ -84,3 +84,17 @@ select {
 
 details.more-details { margin-top: var(--space); font-size: 12px; }
 details.more-details summary { cursor: pointer; color: var(--burgundy-deep); font-weight: 600; }
+
+/* 확인 대화상자 (설정 화면·사이드패널 공용) */
+.confirm-dialog {
+  border: none;
+  border-radius: 10px;
+  padding: 0;
+  max-width: 360px;
+  width: calc(100vw - 48px);
+}
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.confirm-dialog form { padding: 18px 20px; }
+.confirm-dialog h2 { margin: 0 0 8px; color: var(--burgundy-deep); }
+.confirm-dialog p { margin: 0 0 14px; font-size: 13px; white-space: pre-line; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

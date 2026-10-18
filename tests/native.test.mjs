@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {claudeArguments,codexArguments,SYSTEM,taskInput} from '../native-host/host.mjs';
+import {claudeArguments,codexArguments,SYSTEM,taskInput,HOST_VERSION} from '../native-host/host.mjs';
+import {readFileSync} from 'node:fs';
 import {SYSTEM as packSystem} from '../extension/src/core/pack.js';
-import {parseSummary} from '../extension/src/core/policy.js';
+import {parseSummary,hostUpdateHint} from '../extension/src/core/policy.js';
 import {buildReport} from '../extension/src/core/report.js';
 const host=fileURLToPath(new URL('../native-host/host.mjs',import.meta.url));
 function request(message){return new Promise((resolve,reject)=>{
@@ -42,4 +43,14 @@ test('personal summary detail survives parsing and HTML export without editorial
   const html=await buildReport({lecture:{title:'검증',duration:60},groups:[{start:0,end:60,segs:[]}],summary:parsed,meta:{}});
   assert.match(html,/&lt;내용&gt;/);assert.ok(html.includes('5: &lt;내용&gt;'));assert.ok(html.includes('11: &lt;내용&gt;'));
   assert.throws(()=>parseSummary('x'.repeat(2_000_001)),/크기/);
+});
+
+test('the host reports the bundled extension version so an old host left behind is detectable',async()=>{
+  assert.equal(HOST_VERSION,JSON.parse(readFileSync(new URL('../extension/manifest.json',import.meta.url),'utf8')).version);
+  const r=await request({cmd:'codexModels'});assert.equal(r.hostVersion,HOST_VERSION);
+  const msg='Groq 전사 구간 시간이 오디오 범위를 벗어났거나 잘못되었습니다.';
+  assert.equal(hostUpdateHint(msg,'0.1.7','0.1.7'),msg);
+  assert.match(hostUpdateHint(msg,undefined,'0.1.7'),/옛 버전\(0\.1\.5 이하\).*install을 다시 실행/);
+  assert.match(hostUpdateHint(msg,'0.1.5','0.1.7'),/옛 버전\(0\.1\.5\)/);
+  assert.equal(hostUpdateHint(msg,undefined,undefined),msg);
 });

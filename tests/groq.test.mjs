@@ -63,14 +63,21 @@ test('nonempty transcript never gets fabricated timings when segments are absent
   }
 });
 
-test('bad timestamps reject with timing-only diagnostics', async () => {
+test('missing or non-numeric timestamps reject with timing-only diagnostics', async () => {
   for (const segment of [
-    { start: -1, end: 1 }, { start: 2, end: 1 }, { start: '0', end: 1 }, { start: 0, end: '1' },
-    { start: null, end: 1 }, { start: 0, end: null }, { end: 1 },
+    { start: '0', end: 1 }, { start: 0, end: '1' },
+    { start: null, end: 1 }, { start: 0, end: null }, { end: 1 }, { start: NaN, end: 1 },
   ]) await assert.rejects(run({ segments: [{ ...segment, text: 'bad secret text' }] }), (error) =>
     codeIs('GROQ_RESPONSE')(error) && error.message.includes('오디오 60.00초') && !error.message.includes('secret'));
-  await assert.rejects(run({ segments: [{ start: 5, end: 10, text: 'first' }, { start: 4, end: 12, text: 'backwards' }] }), codeIs('GROQ_RESPONSE'));
   await assert.rejects(run(payload, { offset: 1e17 }), codeIs('GROQ_RESPONSE'));
+});
+
+test('odd numeric timestamps are repaired instead of failing the whole lecture', async () => {
+  // Negative start → 0, end before start → start (+1 tick), start before the previous start → moved up to it.
+  assert.deepEqual((await run({ segments: [{ start: -1, end: 1, text: 'neg' }] })).segments, [{ start: 120, end: 121, text: 'neg' }]);
+  assert.deepEqual((await run({ segments: [{ start: 2, end: 1, text: 'rev' }] })).segments, [{ start: 122, end: 120 + (2 + 0.020), text: 'rev' }]);
+  assert.deepEqual((await run({ segments: [{ start: 5, end: 10, text: 'first' }, { start: 4, end: 12, text: 'backwards' }] })).segments,
+    [{ start: 125, end: 130, text: 'first' }, { start: 125, end: 132, text: 'backwards' }]);
 });
 
 test('Whisper padding artifacts are clamped or dropped instead of failing the lecture', async () => {
@@ -144,18 +151,22 @@ test('captured Groq verbose_json timestamps clamp final rounded tick to actual A
   assert.equal(output.segments.at(-1).end, args.offset + duration);
 });
 
-test('end ticks past the audio clamp to the AAC duration; negative starts and backwards starts stay strict', async () => {
+test('end ticks past the audio clamp to the AAC duration; negative and backwards starts are repaired', async () => {
   const duration = 29.976961451247167;
   for (const end of [duration + 0.020, duration + 0.020001, duration + 3]) {
     assert.deepEqual((await run({ segments: [{ start: 29, end, text: 'tick' }] }, { duration })).segments,
       [{ start: 149, end: 120 + duration, text: 'tick' }]);
   }
   assert.deepEqual((await run({ segments: [{ start: duration, end: duration + 0.01, text: 'pad' }] }, { duration })).segments, []);
-  await assert.rejects(run({ segments: [{ start: -0.001, end: 1, text: 'bad' }] }, { duration }), codeIs('GROQ_RESPONSE'));
-  await assert.rejects(run({ segments: [
+  assert.deepEqual((await run({ segments: [{ start: -0.001, end: 1, text: 'tiny negative' }] }, { duration })).segments,
+    [{ start: 120, end: 121, text: 'tiny negative' }]);
+  assert.deepEqual((await run({ segments: [
     { start: 28, end: duration + 0.02, text: 'first' },
     { start: 27, end: duration + 0.01, text: 'backwards start' },
-  ] }, { duration }), codeIs('GROQ_RESPONSE'));
+  ] }, { duration })).segments, [
+    { start: 148, end: 120 + duration, text: 'first' },
+    { start: 148, end: 120 + duration, text: 'backwards start' },
+  ]);
 });
 
 test('429 preserves numeric Retry-After and issues only one network request', async () => {

@@ -95,3 +95,9 @@ export function checkPayload(payload) {
   if(bytes>=64*1024*1024)throw new Error('전송 묶음이 64 MiB 이상입니다. 절약 프리셋을 선택하세요.');
   return bytes;
 }
+// 받아쓰기 응답 검사는 연결 프로그램(호스트)에 있어 확장만 새로 받으면 옛 검사가 남는다(0.1.5 호스트는 버전을 보내지 않음).
+// 호스트 버전이 확장과 다르면 오류 문구 뒤에 install을 다시 실행하라는 안내를 붙인다.
+export function hostUpdateHint(message, hostVersion, extensionVersion) {
+  if (!extensionVersion || hostVersion === extensionVersion) return message;
+  return `${message} 연결 프로그램이 옛 버전(${hostVersion || '0.1.5 이하'})이에요. 받은 ZIP 폴더에서 install을 다시 실행한 뒤 다시 시도하세요.`;
+}

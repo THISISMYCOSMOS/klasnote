@@ -1,21 +1,11 @@
 // options.js — 설정 화면 로직. 백그라운드와는 chrome.runtime.sendMessage({target:'bg',...})로만 통신한다.
 import { mountCampusScene } from './campus.js';
+import { BUSY_STATES, deleteMessage, statusBadge } from './status-labels.js';
 
 const ALLOWED = {
   provider: ['auto', 'claude', 'codex'],
   claudeModel: ['haiku', 'sonnet', 'opus', 'claude-opus-5-5'],
   preset: ['save', 'standard', 'detail'],
-};
-
-const STATUS_LABEL = {
-  queued: '대기 중',
-  running: '처리 중',
-  done: '받아쓰기 완료',
-  summarizing: '요약 중',
-  awaiting_confirmation: '확인 필요',
-  complete: '완료',
-  paused: '일시중지',
-  error: '오류',
 };
 
 const DEFAULT_SETTINGS = {
@@ -56,6 +46,8 @@ function askConfirm(title, msg) {
       resolve(dialog.returnValue === 'ok');
     };
     dialog.addEventListener('close', onClose);
+    // Esc로 닫으면 returnValue가 바뀌지 않는다. 지난번 '확인'이 남아 삭제로 처리되지 않게 비운다.
+    dialog.returnValue = '';
     dialog.showModal();
   });
 }
@@ -63,6 +55,7 @@ function askConfirm(title, msg) {
 let scene;
 let latest = { settings: { ...DEFAULT_SETTINGS }, statuses: {}, opened: {}, metadata: {} };
 let library = { items: [] };
+const deleting = new Set(); // 삭제 확인·요청 중인 contentId (중복 클릭으로 대화상자가 두 번 열리지 않게)
 // 사용자가 저장하지 않은 채 설정 폼을 고치고 있는 동안에는 주기적 refresh가 그 입력을 덮어쓰지 않게 막는다.
 let formDirty = false;
 function markFormDirty() { formDirty = true; }
@@ -163,10 +156,12 @@ function buildLectureItem(item) {
 
   const status = latest.statuses?.[item.contentId];
   const stateKey = status?.state || item.state;
+  const opened = !!latest.opened?.[item.contentId];
   const badge = document.createElement('span');
   badge.className = 'status-badge';
-  badge.dataset.s = stateKey || '';
-  badge.textContent = STATUS_LABEL[stateKey] || (stateKey ? stateKey : '미시작');
+  const [badgeText, badgeKey] = statusBadge(status?.state ? status : stateKey ? { state: stateKey } : null, opened);
+  badge.dataset.s = badgeKey;
+  badge.textContent = badgeText;
   meta.appendChild(document.createElement('br'));
   meta.appendChild(badge);
 
@@ -199,16 +194,18 @@ function buildLectureItem(item) {
   const actions = document.createElement('div');
   actions.className = 'lecture-item__actions';
 
-  const opened = !!latest.opened?.[item.contentId];
   const hasSummary = !!(library.summaries && library.summaries[item.contentId]) || item.state === 'complete';
+
+  // 기록 목록 버튼의 결과·오류는 이 카드 안(#libraryResult)에 보여 준다. 화면 위쪽 AI 설정 칸에 뜨면 보이지 않는다.
+  const report = (res, what) => { if (res && res.ok === false) showTemp(el('libraryResult'), `${what} 실패: ${res.error || ''}`, 8000); };
 
   if (stateKey === 'awaiting_confirmation') {
     actions.appendChild(makeBtn('검토하기', 'btn--primary', async () => {
-      await callBg('openConfirm', { contentId: item.contentId, force: false });
+      report(await callBg('openConfirm', { contentId: item.contentId, force: false }), '확인 화면 열기');
     }));
   } else {
     const runBtn = makeBtn(hasSummary ? '요약 다시 만들기' : '지금 요약', 'btn--primary', async () => {
-      await callBg('openConfirm', { contentId: item.contentId, force: hasSummary });
+      report(await callBg('openConfirm', { contentId: item.contentId, force: hasSummary }), '확인 화면 열기');
     });
     if (!opened) {
       runBtn.disabled = true;
@@ -217,26 +214,56 @@ function buildLectureItem(item) {
     actions.appendChild(runBtn);
   }
 
-  if (hasSummary) {
-    actions.appendChild(makeBtn('다운로드', 'btn--ghost', async () => {
+  // 사이드패널·KLAS 목록과 같은 기준: 받아쓰기가 끝났으면 요약이 없어도(원문만 모드 포함) 원문 HTML을 받을 수 있다.
+  const transcribed = ['done', 'awaiting_confirmation', 'complete'].includes(status?.state) || status?.transcribed === true || item.state === 'done';
+  if (hasSummary || transcribed) {
+    const dl = makeBtn(hasSummary ? '다운로드' : 'HTML 받기', 'btn--ghost', async () => {
+      dl.disabled = true;
       const res = await callBg('download', { contentId: item.contentId });
-      if (!res.ok) showTemp(el('saveResult'), `다운로드 실패: ${res.error || ''}`);
-    }));
+      dl.disabled = false;
+      if (res.ok === false) report(res, '다운로드');
+      else showTemp(el('libraryResult'), '다운로드 폴더의 KLAS요약에 저장했어요.');
+    });
+    if (!hasSummary) dl.title = 'AI 요약 없이 받아쓰기 원문으로 HTML을 받습니다.';
+    actions.appendChild(dl);
+  }
+  if (Number.isInteger(status?.downloadId)) {
+    const folder = makeBtn('폴더 열기', 'btn--ghost', async () => {
+      report(await callBg('showDownload', { contentId: item.contentId }), '폴더 열기');
+    });
+    folder.title = '받은 HTML 파일이 있는 폴더를 엽니다.';
+    actions.appendChild(folder);
   }
 
   if (stateKey === 'queued' || stateKey === 'running' || stateKey === 'summarizing') {
     actions.appendChild(makeBtn('취소', 'btn--ghost', async () => {
-      await callBg('cancel', { contentId: item.contentId });
+      report(await callBg('cancel', { contentId: item.contentId }), '취소');
       refresh();
     }));
   }
 
-  actions.appendChild(makeBtn('삭제', 'btn--danger btn--sm', async () => {
-    const ok = await askConfirm('강의 기록 삭제', `"${item.title || '이 강의'}"의 로컬 기록(대본·슬라이드·요약)을 삭제할까요? 되돌릴 수 없습니다.`);
-    if (!ok) return;
-    const res = await callBg('deleteLecture', { contentId: item.contentId });
-    if (res.ok) refresh();
-  }));
+  const delBtn = makeBtn('삭제', 'btn--danger btn--sm', async () => {
+    if (deleting.has(item.contentId)) return;
+    deleting.add(item.contentId);
+    delBtn.disabled = true;
+    try {
+      const ok = await askConfirm('강의 기록 삭제', deleteMessage(item.title));
+      if (!ok) return;
+      const res = await callBg('deleteLecture', { contentId: item.contentId });
+      if (res.ok === false) { showTemp(el('libraryResult'), `삭제하지 못했어요: ${res.error || ''}`, 8000); return; }
+      showTemp(el('libraryResult'), `"${item.title || '이 강의'}" 기록을 삭제했어요.`);
+    } finally {
+      deleting.delete(item.contentId);
+      delBtn.disabled = false;
+      refresh();
+    }
+  });
+  // 받아쓰기·AI 요약 중에는 삭제할 수 없다. 버튼을 막고 이유를 보여 준다.
+  if (BUSY_STATES.has(status?.state)) {
+    delBtn.disabled = true;
+    delBtn.title = '처리 중에는 삭제할 수 없어요. 취소한 뒤 삭제하세요.';
+  }
+  actions.appendChild(delBtn);
 
   li.appendChild(actions);
   return li;

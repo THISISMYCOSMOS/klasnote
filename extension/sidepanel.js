@@ -2,24 +2,9 @@
 // 강의별 상태(대기/진행/확인/완료/오류)를 더 자세히 보여준다.
 // 폴링 없음: stateChanged 브로드캐스트, storage 변경(화면이 보일 때만), visibilitychange에서만 갱신한다.
 import { mountCampusScene } from './campus.js';
-
-const STATUS_LABEL = {
-  queued: '대기 중',
-  running: '처리 중',
-  summarizing: '요약 중',
-  awaiting_confirmation: '확인 필요',
-  done: '확인 필요',
-  complete: '완료',
-  paused: '일시중지',
-  error: '오류',
-};
+import { BUSY_STATES, deleteMessage, etaText, queueText, rawSaved, statusBadge } from './status-labels.js';
 
 const PROGRESS_STATES = new Set(['queued', 'running']);
-const OPENED_LABEL = '요약 전 (열람됨)';
-const UNKNOWN_LABEL = '상태 확인 필요';
-const RAW_SAVED_LABEL = 'HTML 저장됨';
-// 'HTML 받기'로 원문을 이미 받은 강의는 확인 필요로 띄우지 않고 완료 쪽(아래)으로 보낸다.
-const rawSaved = (s) => ['awaiting_confirmation', 'done'].includes(s?.state) && s?.rawSaved === true;
 
 function hasRuntime() {
   return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id;
@@ -40,6 +25,11 @@ function el(id) { return document.getElementById(id); }
 let scene;
 let helpOpen = false;
 const pending = new Set(); // 응답 대기 중인 contentId (중복 클릭 방지)
+let lastQueue = []; // 받아쓰기 대기열 순서(getState의 queue)
+// 접어 둔 과목. 이 브라우저에만 기억한다(저장소가 막혀 있으면 이번 화면에서만 유지).
+const COLLAPSED_KEY = 'klasnote.collapsedCourses';
+const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'); } catch { return []; } })());
+function saveCollapsed() { try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed])); } catch {} }
 
 function showError(message) {
   const box = el('errorBanner');
@@ -50,6 +40,18 @@ function clearError() {
   const box = el('errorBanner');
   box.hidden = true;
   box.textContent = '';
+}
+
+// 사이드패널에서는 브라우저 기본 confirm() 대신 <dialog>로 묻는다.
+function askConfirm(title, msg) {
+  const dialog = el('confirmDialog');
+  el('confirmDialogTitle').textContent = title;
+  el('confirmDialogMsg').textContent = msg;
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+    dialog.returnValue = '';
+    dialog.showModal();
+  });
 }
 
 async function openOptions() {
@@ -122,9 +124,9 @@ function buildItem(contentId, status, metadata, opened) {
   const badge = document.createElement('span');
   badge.className = 'status-badge';
   const state = status?.state;
-  const saved = rawSaved(status);
-  badge.dataset.s = saved ? 'complete' : state || 'opened';
-  badge.textContent = saved ? RAW_SAVED_LABEL : state ? (STATUS_LABEL[state] || UNKNOWN_LABEL) : opened?OPENED_LABEL:'열람 전';
+  const [badgeText, badgeKey] = statusBadge(status, opened);
+  badge.dataset.s = badgeKey;
+  badge.textContent = badgeText;
   row.appendChild(badge);
 
   const progress = status ? clampProgress(status.progress) : null;
@@ -185,6 +187,22 @@ function buildItem(contentId, status, metadata, opened) {
     row.appendChild(raw);
   }
 
+  // 마지막으로 받은 HTML을 파일 탐색기에서 보여 준다.
+  if (opened && Number.isInteger(status?.downloadId)) {
+    const folder = document.createElement('button');
+    folder.type = 'button';
+    folder.className = 'sp-mini-btn sp-mini-btn--ghost';
+    folder.textContent = '폴더 열기';
+    folder.title = '받은 HTML 파일이 있는 폴더를 엽니다.';
+    folder.addEventListener('click', async (e) => {
+      if (!e.isTrusted) return;
+      clearError();
+      const res = await callBg('showDownload', { contentId });
+      if (res && res.ok === false) showError(res.error || '폴더를 열지 못했어요.');
+    });
+    row.appendChild(folder);
+  }
+
   li.appendChild(row);
 
   if (status?.step) {
@@ -192,6 +210,14 @@ function buildItem(contentId, status, metadata, opened) {
     step.className = 'sp-item__step';
     step.textContent = String(status.step).slice(0,200);
     li.appendChild(step);
+  }
+
+  const when = queueText(contentId, status, lastQueue) || etaText(status);
+  if (when) {
+    const w = document.createElement('div');
+    w.className = 'sp-item__step sp-item__when';
+    w.textContent = when;
+    li.appendChild(w);
   }
 
   if (status && PROGRESS_STATES.has(state) && status.preview) {
@@ -216,11 +242,34 @@ function buildItem(contentId, status, metadata, opened) {
     li.appendChild(errLine);
   }
 
-  if (status && state === 'complete') {
-    const hint = document.createElement('div');
-    hint.className = 'sp-item__hint';
-    hint.textContent = '저장된 HTML을 다시 받아요 (추가 AI 처리 없음).';
-    li.appendChild(hint);
+  // 이 PC에 남은 기록(상태·대본·슬라이드·요약)을 지운다. 열람 기록은 남아 '요약 전 (열람됨)'으로 돌아간다.
+  // 상태만 남은 기록(대본 저장 전에 실패한 오류 등)도 여기서 지울 수 있다.
+  if (state) {
+    const foot = document.createElement('div');
+    foot.className = 'sp-item__foot';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'sp-del-btn';
+    del.textContent = '기록 삭제';
+    const busy = BUSY_STATES.has(state);
+    del.disabled = busy || pending.has(contentId);
+    if (busy) del.title = '처리 중에는 삭제할 수 없어요. 중지한 뒤 삭제하세요.';
+    del.addEventListener('click', async (e) => {
+      if (!e.isTrusted || pending.has(contentId)) return;
+      clearError();
+      pending.add(contentId);
+      del.disabled = true;
+      try {
+        if (!(await askConfirm('강의 기록 삭제', deleteMessage(meta.title)))) return;
+        const res = await callBg('deleteLecture', { contentId });
+        if (res && res.ok === false) showError(res.error || '기록을 삭제하지 못했어요.');
+      } finally {
+        pending.delete(contentId);
+        await refresh();
+      }
+    });
+    foot.appendChild(del);
+    li.appendChild(foot);
   }
 
   return li;
@@ -272,10 +321,13 @@ async function refresh() {
   const statuses = res.statuses || {};
   const opened = res.opened || {};
   const metadata = res.metadata || {};
+  lastQueue = Array.isArray(res.queue) ? res.queue : [];
   const ids = Array.from(new Set([...Object.keys(statuses), ...Object.keys(opened)]));
   const priority={running:0,summarizing:0,queued:0,awaiting_confirmation:1,done:1,error:2,paused:2,complete:3};
   const rank=id=>rawSaved(statuses[id])?priority.complete:(priority[statuses[id]?.state]??4);
-  ids.sort((a,b)=>rank(a)-rank(b)||(statuses[b]?.updatedAt??opened[b]??0)-(statuses[a]?.updatedAt??opened[a]??0));
+  // 처리 중·대기 강의는 실제 대기열 순서대로(처리 중이 맨 위), 나머지는 최근 변경 순.
+  const inQueue=id=>{const i=lastQueue.indexOf(id);return i<0?Infinity:i;};
+  ids.sort((a,b)=>rank(a)-rank(b)||(inQueue(a)-inQueue(b)||0)||(statuses[b]?.updatedAt??opened[b]??0)-(statuses[a]?.updatedAt??opened[a]??0));
 
   const list = el('lectureList');
   list.replaceChildren();
@@ -285,8 +337,42 @@ async function refresh() {
     el('emptyMsg').textContent = 'KLAS 강의 목록에서 보기를 눌러 강의를 열어보세요.';
   } else {
     el('emptyMsg').hidden = true;
+    // 과목별로 묶는다. 묶음 순서는 그 과목에서 가장 급한 강의 순서를 따른다. 과목이 하나면 묶지 않는다.
+    const groups = new Map();
     for (const contentId of ids) {
-      list.appendChild(buildItem(contentId, statuses[contentId] || null, metadata,!!opened[contentId]));
+      const course = metadata[contentId]?.course || '과목 미지정';
+      if (!groups.has(course)) groups.set(course, []);
+      groups.get(course).push(contentId);
+    }
+    const item = (contentId) => buildItem(contentId, statuses[contentId] || null, metadata, !!opened[contentId]);
+    if (groups.size === 1) {
+      for (const contentId of ids) list.appendChild(item(contentId));
+    } else {
+      for (const [course, members] of groups) {
+        const li = document.createElement('li');
+        li.className = 'sp-group';
+        const details = document.createElement('details');
+        details.open = !collapsed.has(course);
+        const summary = document.createElement('summary');
+        summary.className = 'sp-group__head';
+        const name = document.createElement('span');
+        name.textContent = course;
+        const count = document.createElement('span');
+        count.className = 'sp-group__count';
+        const ready = members.filter((id) => ['done', 'awaiting_confirmation'].includes(statuses[id]?.state) && !rawSaved(statuses[id])).length;
+        count.textContent = ready ? `${members.length}개 · 확인 필요 ${ready}` : `${members.length}개`;
+        summary.append(name, count);
+        const sub = document.createElement('ul');
+        sub.className = 'sp-list';
+        for (const contentId of members) sub.appendChild(item(contentId));
+        details.append(summary, sub);
+        details.addEventListener('toggle', () => {
+          if (details.open) collapsed.delete(course); else collapsed.add(course);
+          saveCollapsed();
+        });
+        li.appendChild(details);
+        list.appendChild(li);
+      }
     }
   }
 

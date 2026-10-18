@@ -18,7 +18,7 @@
     if(!chrome.runtime?.id){disposed=true;label.textContent='클라스노트 · 페이지 새로고침 필요';return;}
     try{
       const {counts,consent}=await send('getStatus');if(disposed)return;
-      const text=!consent?'처음 설정':counts.active?`처리 중 ${counts.active}`:counts.ready?`확인 필요 ${counts.ready}`:counts.error?`오류 ${counts.error} · 눌러서 확인`:'대기';
+      const text=!consent?'처음 설정':counts.active?`처리 중 ${counts.active}`:counts.ready?`확인 필요 ${counts.ready}`:counts.error?`오류 ${counts.error}`:'대기';
       label.textContent=`클라스노트 · ${text}`;dot.toggleAttribute('data-active',counts.active>0);
     }catch{if(!disposed)label.textContent='클라스노트 · 연결 확인';}
   }
