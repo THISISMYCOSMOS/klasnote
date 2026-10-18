@@ -2,7 +2,7 @@
 // 강의별 상태(대기/진행/확인/완료/오류)를 더 자세히 보여준다.
 // 폴링 없음: stateChanged 브로드캐스트, storage 변경(화면이 보일 때만), visibilitychange에서만 갱신한다.
 import { mountCampusScene } from './campus.js';
-import { BUSY_STATES, deleteMessage, etaText, queueText, rawSaved, statusBadge } from './status-labels.js';
+import { BUSY_STATES, etaText, queueText, rawSaved, statusBadge } from './status-labels.js';
 
 const PROGRESS_STATES = new Set(['queued', 'running']);
 
@@ -42,16 +42,14 @@ function clearError() {
   box.textContent = '';
 }
 
-// 사이드패널에서는 브라우저 기본 confirm() 대신 <dialog>로 묻는다.
-function askConfirm(title, msg) {
-  const dialog = el('confirmDialog');
-  el('confirmDialogTitle').textContent = title;
-  el('confirmDialogMsg').textContent = msg;
-  return new Promise((resolve) => {
-    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
-    dialog.returnValue = '';
-    dialog.showModal();
-  });
+// 삭제 결과처럼 오류가 아닌 안내는 잠깐 보여 주고 지운다.
+let noticeTimer = null;
+function showNotice(message) {
+  const box = el('noticeBanner');
+  box.hidden = false;
+  box.textContent = message;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { box.hidden = true; box.textContent = ''; }, 6000);
 }
 
 async function openOptions() {
@@ -242,7 +240,7 @@ function buildItem(contentId, status, metadata, opened) {
     li.appendChild(errLine);
   }
 
-  // 이 PC에 남은 기록(상태·대본·슬라이드·요약)을 지운다. 열람 기록은 남아 '요약 전 (열람됨)'으로 돌아간다.
+  // 이 PC에 남은 기록(상태·대본·슬라이드·요약)을 지우고 목록에서 뺀다. 받은 HTML 파일은 그대로 둔다.
   // 상태만 남은 기록(대본 저장 전에 실패한 오류 등)도 여기서 지울 수 있다.
   if (state) {
     const foot = document.createElement('div');
@@ -260,7 +258,6 @@ function buildItem(contentId, status, metadata, opened) {
       pending.add(contentId);
       del.disabled = true;
       try {
-        if (!(await askConfirm('강의 기록 삭제', deleteMessage(meta.title)))) return;
         const res = await callBg('deleteLecture', { contentId });
         if (res && res.ok === false) showError(res.error || '기록을 삭제하지 못했어요.');
       } finally {
@@ -322,12 +319,17 @@ async function refresh() {
   const opened = res.opened || {};
   const metadata = res.metadata || {};
   lastQueue = Array.isArray(res.queue) ? res.queue : [];
-  const ids = Array.from(new Set([...Object.keys(statuses), ...Object.keys(opened)]));
+  // 기록을 삭제한 강의는 다시 처리하기 전까지 목록에 띄우지 않는다(상태가 새로 생기면 다시 보인다).
+  const dismissed = res.dismissed || {};
+  const ids = Array.from(new Set([...Object.keys(statuses), ...Object.keys(opened).filter((id) => !dismissed[id])]));
   const priority={running:0,summarizing:0,queued:0,awaiting_confirmation:1,done:1,error:2,paused:2,complete:3};
   const rank=id=>rawSaved(statuses[id])?priority.complete:(priority[statuses[id]?.state]??4);
   // 처리 중·대기 강의는 실제 대기열 순서대로(처리 중이 맨 위), 나머지는 최근 변경 순.
   const inQueue=id=>{const i=lastQueue.indexOf(id);return i<0?Infinity:i;};
   ids.sort((a,b)=>rank(a)-rank(b)||(inQueue(a)-inQueue(b)||0)||(statuses[b]?.updatedAt??opened[b]??0)-(statuses[a]?.updatedAt??opened[a]??0));
+
+  // 지울 수 있는 강의(처리 중이 아닌 것)가 있을 때만 '전체 삭제'를 보인다.
+  el('deleteAllBtn').hidden = !ids.some((id) => !BUSY_STATES.has(statuses[id]?.state));
 
   const list = el('lectureList');
   list.replaceChildren();
@@ -401,6 +403,17 @@ function init() {
   el('settingsBtn').addEventListener('click', (e) => { if (e.isTrusted) openOptions(); });
   el('setupBtn').addEventListener('click', (e) => { if (e.isTrusted) openConsentOnce(); });
   el('helpBtn').addEventListener('click', (e) => { if (e.isTrusted) toggleHelp(!helpOpen); });
+  el('deleteAllBtn').addEventListener('click', async (e) => {
+    if (!e.isTrusted) return;
+    const btn = el('deleteAllBtn');
+    btn.disabled = true;
+    clearError();
+    const res = await callBg('deleteAll');
+    btn.disabled = false;
+    if (res.ok === false) showError(res.error || '전체 삭제를 하지 못했어요.');
+    else showNotice(res.skipped ? `${res.removed}개를 지웠어요. 처리 중인 ${res.skipped}개는 남겨 뒀어요.` : `${res.removed}개를 지웠어요.`);
+    await refresh();
+  });
   el('helpCloseBtn').addEventListener('click', (e) => { if (e.isTrusted) toggleHelp(false); });
 
   if (hasRuntime()) {

@@ -18,14 +18,14 @@ globalThis.chrome={
     sendMessage:async m=>{
       if(m.target!=='offscreen')return;
       engineCount++;
-      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return lectureState==='missing'?{ok:false,error:'아직 받아쓰기가 끝나지 않았습니다.'}:{ok:true,url:'blob:'+self+'abc',title:'CON'};default:throw Error('unexpected engine command '+m.cmd);}
+      switch(m.cmd){case 'pauseQueue':return {ok:true};case 'ping':return {ok:true,gpu:true};case 'lecture':return {ok:true,item:{state:lectureState,title:'테스트'}};case 'enqueue':enqueueCount++;return {ok:true,queued:true};case 'getSummary':return {ok:true,item:cache};case 'pack':return {ok:true,...clone(pack)};case 'saveSummary':cache=clone(m.item);return {ok:true};case 'report':return lectureState==='missing'?{ok:false,error:'아직 받아쓰기가 끝나지 않았습니다.'}:{ok:true,url:'blob:'+self+'abc',title:'CON'};case 'remove':removedIds.push(m.contentId);return {ok:true};case 'list':return {ok:true,items:listItems};default:throw Error('unexpected engine command '+m.cmd);}
     },
     connectNative(){let onMessage,onDisconnect,timer;return {onMessage:{addListener(fn){onMessage=fn;}},onDisconnect:{addListener(fn){onDisconnect=fn;}},disconnect(){clearTimeout(timer);onDisconnect?.();},postMessage(m){nativeCount++;timer=setTimeout(()=>onMessage(m.cmd==='groqStatus'?{ok:true,configured:true}:m.cmd==='transcribeGroq'?{ok:true,segments:[]}:m.cmd==='summarize'&&nativeFail?{ok:false,error:nativeFail}:{ok:true,text:JSON.stringify(summary),usage:{input:42}}),nativeDelay);}};},
   },
   downloads:{download:async args=>{assert.match(args.filename,/KLAS요약\/과목\/_CON\.html$/);if(downloadFailures){downloadFailures--;throw Error('download failed');}downloads++;return downloads;}},
   offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},tabs:{create:async()=>({id:2})}
 };
-let panelPaths=[],panelCalls=[];
+let panelPaths=[],panelCalls=[],removedIds=[],listItems=[];
 chrome.sidePanel={setPanelBehavior:async()=>{},open:async options=>{panelOpens.push(options);},setOptions:async options=>{panelPaths.push(options.path);panelCalls.push(options);}};
 const {route,friendlyError}=await import('../extension/background.js');
 const send=(type,extra={})=>route({type,...extra},ui);
@@ -291,4 +291,16 @@ test('queue timing, the toolbar badge and "open folder" follow the lecture statu
   await send('showDownload',{contentId:id});assert.deepEqual(shown,[downloadId]);
   exists=false;await assert.rejects(send('showDownload',{contentId:id}),/파일을 찾지 못했어요/);assert.deepEqual(shown,[downloadId]);
  }finally{delete chrome.action;delete chrome.downloads.search;delete chrome.downloads.show;}
+});
+
+test('deleting removes the record and hides the lecture; delete all skips lectures being processed',async()=>{
+ // 사용자 요청: 삭제하면 '지금 요약'으로 돌아가지 말고 목록에서 사라져야 한다. 열람 기록(opened)은 요약 허용 조건이라 남긴다.
+ reset();removedIds=[];const b='fedcba9876543210',c='0123456789abcdee';
+ data.statuses[id]={state:'complete',auto:true};data.opened[b]=1;data.statuses[c]={state:'running'};data.opened[c]=1;listItems=[{contentId:b}];
+ await send('deleteLecture',{contentId:id});
+ assert.equal(data.statuses[id],undefined);assert.ok(data.dismissed[id]);assert.ok(data.opened[id]);assert.deepEqual(removedIds,[id]);
+ const r=await send('deleteAll');
+ assert.equal(r.skipped,1);assert.equal(r.removed,1);assert.equal(data.statuses[c].state,'running');assert.equal(data.dismissed[c],undefined);
+ assert.ok(data.dismissed[b]);assert.ok(removedIds.includes(b));
+ const st=await send('getState');assert.ok(st.dismissed[id]&&st.dismissed[b]);
 });

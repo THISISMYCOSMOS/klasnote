@@ -17,6 +17,7 @@
 
   <p id="connBanner" class="sp-banner" role="status" aria-live="polite">확인 중…</p>
   <p id="errorBanner" class="sp-banner sp-banner--error" role="alert" hidden></p>
+  <p id="noticeBanner" class="sp-banner" role="status" hidden></p>
 
   <section id="setupCard" class="sp-card" hidden>
     <p class="sp-card__text">아직 처리 방식을 선택하지 않았어요. 먼저 설정을 끝내주세요.</p>
@@ -28,7 +29,10 @@
   <section id="mainView" class="sp-main" hidden>
     <div class="sp-toolbar">
       <span id="modeLabel" class="sp-mode"></span>
-      <button type="button" id="helpBtn" class="btn btn--ghost btn--sm" aria-expanded="false" aria-controls="helpBox">사용방법</button>
+      <span class="sp-toolbar__right">
+        <button type="button" id="deleteAllBtn" class="sp-del-btn" hidden>전체 삭제</button>
+        <button type="button" id="helpBtn" class="btn btn--ghost btn--sm" aria-expanded="false" aria-controls="helpBox">사용방법</button>
+      </span>
     </div>
 
     <section id="helpBox" class="sp-help" hidden aria-label="사용 방법">
@@ -51,16 +55,6 @@
   </section>
 </div>
 
-<dialog id="confirmDialog" class="confirm-dialog">
-  <form method="dialog">
-    <h2 id="confirmDialogTitle">확인</h2>
-    <p id="confirmDialogMsg"></p>
-    <div class="dialog-actions">
-      <button type="submit" value="cancel" class="btn btn--ghost btn--sm">취소</button>
-      <button type="submit" value="ok" class="btn btn--danger btn--sm">삭제</button>
-    </div>
-  </form>
-</dialog>
 <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

@@ -242,3 +242,7 @@ html, body {
 .sp-group__head::-webkit-details-marker { display: none; }
 .sp-group__head > span:first-child::before { content: '▸'; display: inline-block; width: 1em; color: var(--ink-soft); }
 .sp-group > details[open] > .sp-group__head > span:first-child::before { content: '▾'; }
+
+/* 툴바 오른쪽: 전체 삭제 + 사용방법 */
+.sp-toolbar__right { display: flex; align-items: center; gap: 8px; }
+.sp-del-btn[hidden] { display: none; }

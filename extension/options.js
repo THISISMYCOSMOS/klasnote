@@ -1,6 +1,6 @@
 // options.js — 설정 화면 로직. 백그라운드와는 chrome.runtime.sendMessage({target:'bg',...})로만 통신한다.
 import { mountCampusScene } from './campus.js';
-import { BUSY_STATES, deleteMessage, statusBadge } from './status-labels.js';
+import { BUSY_STATES, statusBadge } from './status-labels.js';
 
 const ALLOWED = {
   provider: ['auto', 'claude', 'codex'],
@@ -55,7 +55,7 @@ function askConfirm(title, msg) {
 let scene;
 let latest = { settings: { ...DEFAULT_SETTINGS }, statuses: {}, opened: {}, metadata: {} };
 let library = { items: [] };
-const deleting = new Set(); // 삭제 확인·요청 중인 contentId (중복 클릭으로 대화상자가 두 번 열리지 않게)
+const deleting = new Set(); // 삭제 요청 중인 contentId (중복 클릭 방지)
 // 사용자가 저장하지 않은 채 설정 폼을 고치고 있는 동안에는 주기적 refresh가 그 입력을 덮어쓰지 않게 막는다.
 let formDirty = false;
 function markFormDirty() { formDirty = true; }
@@ -247,8 +247,6 @@ function buildLectureItem(item) {
     deleting.add(item.contentId);
     delBtn.disabled = true;
     try {
-      const ok = await askConfirm('강의 기록 삭제', deleteMessage(item.title));
-      if (!ok) return;
       const res = await callBg('deleteLecture', { contentId: item.contentId });
       if (res.ok === false) { showTemp(el('libraryResult'), `삭제하지 못했어요: ${res.error || ''}`, 8000); return; }
       showTemp(el('libraryResult'), `"${item.title || '이 강의'}" 기록을 삭제했어요.`);
@@ -291,6 +289,7 @@ function renderLibrary() {
   ul.replaceChildren();
   const items = library.items || [];
   el('libraryEmpty').hidden = items.length > 0;
+  el('deleteAllBtn').hidden = items.length === 0;
   for (const item of items) ul.appendChild(buildLectureItem(item));
 }
 
@@ -339,6 +338,15 @@ function gatherSettingsFromForm() {
 
 async function groqStatus(){const r=await callBg('groqStatus');el('groqState').textContent=r.ok===false?'연결 프로그램 확인 필요: '+r.error:r.configured?'Groq 키 저장됨 · 연결 테스트를 눌러 확인하세요.':'Groq API 키가 없습니다.';}
 function wireEvents() {
+  el('deleteAllBtn').addEventListener('click', async (e) => {
+    if (!e.isTrusted) return;
+    el('deleteAllBtn').disabled = true;
+    const res = await callBg('deleteAll');
+    el('deleteAllBtn').disabled = false;
+    if (res.ok === false) showTemp(el('libraryResult'), `전체 삭제를 하지 못했어요: ${res.error || ''}`, 8000);
+    else showTemp(el('libraryResult'), res.skipped ? `${res.removed}개를 지웠어요. 처리 중인 ${res.skipped}개는 남겨 뒀어요.` : `${res.removed}개를 지웠어요.`, 6000);
+    refresh();
+  });
   el('saveGroqKey').addEventListener('click',async e=>{
     if(!e.isTrusted)return;
     const key=el('groqApiKey').value.trim();el('groqApiKey').value='';

@@ -8,7 +8,8 @@ let storageTail=Promise.resolve(), engineCreation=null;
 const active=new Set(), deleted=new Set();
 const nativeJobs=new Map(),asrJobs=new Map();
 const lastOpened=new Map(); // 강의 열림 이벤트 중복 방지(두 플레이어 프레임·빠른 재열기)
-async function state(){const s=await chrome.storage.local.get(['settings','statuses','opened','metadata']);return {settings:cleanSettings({},s.settings),statuses:s.statuses??{},opened:s.opened??{},metadata:s.metadata??{}};}
+// dismissed: 사용자가 기록을 삭제해 패널 목록에서 뺀 강의. 열람 기록(opened)은 요약 허용 조건이라 그대로 둔다.
+async function state(){const s=await chrome.storage.local.get(['settings','statuses','opened','metadata','dismissed']);return {settings:cleanSettings({},s.settings),statuses:s.statuses??{},opened:s.opened??{},metadata:s.metadata??{},dismissed:s.dismissed??{}};}
 function mutate(fn){const p=storageTail.then(async()=>{const s=await state();await fn(s);await chrome.storage.local.set(s);updateBadge(s);chrome.runtime.sendMessage({target:'ui',type:'stateChanged'}).catch(()=>{});return s;});storageTail=p.catch(()=>{});return p;}
 // 확장 아이콘에 '확인 필요' 강의 수를 띄운다. KLAS 화면을 보고 있지 않아도 처리가 끝난 걸 알 수 있다.
 function updateBadge(s){
@@ -212,7 +213,21 @@ const uiHandlers={
   async test(){const s=await state();if(!s.settings.consent||s.settings.mode!=='ai')throw new Error('AI 모드 동의 후 연결 테스트가 가능합니다.');const provider=await chooseProvider(s.settings);return nativeCall({cmd:'test',provider,model:modelFor(provider,s.settings)});},
   codexModels:()=>nativeCall({cmd:'codexModels'}),
   async getLibrary(){const [items,summaries]=await Promise.all([store.allLectures(),store.allSummaries()]);return {items,summaries:Object.fromEntries(summaries.map(x=>[x.contentId,{createdAt:x.createdAt,aiLabel:x.aiLabel}]))};},
-  async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];});return {};},
+  async deleteLecture(m){const id=requiredId(m.contentId);if(active.has(id))throw new Error('AI 요청이 끝난 뒤 삭제할 수 있습니다.');const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);await mutate(s=>{delete s.statuses[id];s.dismissed[id]=Date.now();});return {};},
+  // 전체 삭제: 처리 중(받아쓰기·AI 요약)인 강의는 건너뛰고 나머지 기록을 모두 지운 뒤 목록에서 뺀다. 받은 HTML 파일은 그대로 둔다.
+  async deleteAll(){
+    const s=await state(),contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[SELF+'offscreen.html']});
+    const stored=new Set((contexts.length?(await rawEngine('list')).items:await store.allLectures()).map(x=>x.contentId));
+    // 이미 지워 목록에서 뺀 강의(상태·저장 기록 없음)는 다시 세지 않는다.
+    const ids=new Set([...Object.keys(s.statuses),...stored,...Object.keys(s.opened).filter(id=>!s.dismissed[id])]);
+    const removed=[];let skipped=0;
+    for(const id of ids){
+      if(active.has(id)||['queued','running','summarizing'].includes(s.statuses[id]?.state)){skipped++;continue;}
+      try{if(contexts.length)await rawEngine('remove',{contentId:id});else await store.deleteLecture(id);deleted.add(id);removed.push(id);}catch{skipped++;}
+    }
+    await mutate(s=>{const now=Date.now();for(const id of removed){delete s.statuses[id];s.dismissed[id]=now;}});
+    return {removed:removed.length,skipped};
+  },
   async cancel(m){const id=requiredId(m.contentId);if(active.has(id)){deleted.add(id);nativeJobs.get(id)?.abort();await patch(id,{intent:null,ticket:null,state:'paused',step:'AI 요청 중지됨 · 이미 사용한 사용량 유지'});return {};}asrJobs.get(id)?.abort();const r=await engine('cancel',{contentId:id});await patch(id,r.found?{intent:null,ticket:null,step:'중지 요청됨'}:{intent:null,ticket:null,state:'paused',step:'중지됨',preview:null});return {};},
   download:m=>downloadFromList(requiredId(m.contentId)),
   prepareSummary:m=>prepare(requiredId(m.contentId),m.force===true,{poll:m.poll===true}),

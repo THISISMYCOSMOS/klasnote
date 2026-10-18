@@ -17,11 +17,6 @@ export const BUSY_STATES = new Set(['queued', 'running', 'summarizing']);
 // 'HTML 받기'로 원문을 이미 받은 강의는 확인 필요로 띄우지 않고 완료 쪽으로 보낸다.
 export const rawSaved = (s) => ['awaiting_confirmation', 'done'].includes(s?.state) && s?.rawSaved === true;
 
-// 삭제는 이 PC 확장 저장소의 기록만 지운다. 다운로드한 HTML 파일과 열람 기록은 남는다.
-// 자동 처리 스위치는 강의 상태에 들어 있어 함께 꺼진다.
-export function deleteMessage(title) {
-  return `"${title || '이 강의'}"의 받아쓰기·슬라이드·요약을 이 PC에서 지울까요? 되돌릴 수 없어요.\n\n받아 둔 HTML 파일은 그대로 있고, 자동 처리는 꺼져요.`;
-}
 
 // 대기열 위치: queue는 백그라운드가 준 [처리 중, 대기…] 순서다. KLAS 목록(klas-list.js)도 같은 규칙을 쓴다.
 export function queueText(contentId, status, queue) {
